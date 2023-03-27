@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Input
@@ -42,19 +43,15 @@ def encode_board(board: chess.Board) -> str:
     )
 
 
-def filter_games(file_path: str) -> List[chess.pgn.Game]:
-    filtered_games = []
-    with open(file_path, "r") as file:
+def load_filtered_games(pgn_filepath):
+    with open(pgn_filepath) as pgn_file:
+        games = []
         while True:
-            game = chess.pgn.read_game(file)
+            game = chess.pgn.read_game(pgn_file)
             if game is None:
                 break
-
-            if game.headers['Event'] == "Rated Classical game" and 'Variant' not in game.headers:
-                filtered_games.append(game)
-
-    return filtered_games
-
+            games.append(game)
+    return games
 
 def parse_game(game: chess.pgn.Game) -> List[Tuple[chess.Board, chess.Move]]:
     result = []
@@ -190,9 +187,10 @@ def meta_train(model, games_by_player, epochs, k_shot_support, k_shot_query, met
 
 
 # Training the model
-
-file_path = '/home/ben/fun/chess-dl/lichess_db_standard_rated_2013-01.pgn'
-filtered_games = filter_games(file_path)
+script_dir = os.path.dirname(os.path.realpath(__file__))
+file_name = 'filtered_games.pgn'
+file_path = os.path.join(script_dir, file_name)
+filtered_games = load_filtered_games(file_path)
 
 pretraining_data = generate_pretraining_data(filtered_games)
 
@@ -214,14 +212,6 @@ for game in filtered_games:
     black_player = game.headers['Black']
     games_by_player[white_player].append(game)
     games_by_player[black_player].append(game)
-
-# Filter out players with insufficient games
-min_moves = 100
-filtered_players = {}
-for player, games in games_by_player.items():
-    total_moves = sum(len(parse_game(game, player)) for game in games)
-    if total_moves >= min_moves:
-        filtered_players[player] = games
 
 meta_train(model, filtered_players, epochs=100, k_shot_support=50, k_shot_query = 50, meta_lr=1e-3, inner_lr=1e-2)
 
