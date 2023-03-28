@@ -1,17 +1,9 @@
-import chesspresso.game.Game;
-import chesspresso.pgn.PGN;
-import chesspresso.pgn.PGNReader;
-import chesspresso.pgn.PGNWriter;
-import chesspresso.pgn.PGNSyntaxError;
-
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.io.*;
+import java.nio.file.*;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class PreprocessChessData {
 
@@ -27,84 +19,119 @@ public class PreprocessChessData {
 
         Map<String, Integer> playerMoveCount = new HashMap<>();
 
-        try (FileReader fileReader = new FileReader(inputPath.toFile())) {
-            PGNReader pgnReader = new PGNReader(fileReader, "filename");
+        Pattern eventPattern = Pattern.compile("\\[Event \"Rated Classical game\"\\]");
+        Pattern whitePattern = Pattern.compile("\\[White \"([^\"]+)\"\\]");
+        Pattern blackPattern = Pattern.compile("\\[Black \"([^\"]+)\"\\]");
+        Pattern variantPattern = Pattern.compile("\\[Variant \"([^\"]+)\"\\]");
+        Pattern resultPattern = Pattern.compile("(1-0|0-1|1/2-1/2)$");
 
-            Game game;
-            while (true) {
-                try {
-                    game = pgnReader.parseGame();
-                } catch (PGNSyntaxError e) {
-                    System.err.println("Error parsing game: " + e.getMessage());
-                    continue;
+        int linesRead = 0;
+        int resultsMatched = 0;
+        int classicalGamesFound = 0;
+        int gamesCounted = 0;
+
+        // First pass: Count moves for each player
+        try (BufferedReader reader = Files.newBufferedReader(inputPath)) {
+            String line;
+            boolean isRatedClassicalGame = false;
+            String whitePlayer = null;
+            String blackPlayer = null;
+
+            while ((line = reader.readLine()) != null) {
+                linesRead++;
+                if (eventPattern.matcher(line).find()) {
+                    isRatedClassicalGame = true;
+                    classicalGamesFound++;
                 }
 
-                if (game == null) {
-                    break;
+                if (variantPattern.matcher(line).find()) {
+                    isRatedClassicalGame = false;
                 }
 
-                String[] tags = game.getTags();
-                boolean isRatedClassical = false;
-                boolean isStandardVariant = true;
+                Matcher whiteMatcher = whitePattern.matcher(line);
+                if (whiteMatcher.find()) {
+                    whitePlayer = whiteMatcher.group(1);
+                }
 
-                for (String tag : tags) {
-                    if (tag.startsWith("[Event \"Rated Classical game\"]")) {
-                        isRatedClassical = true;
-                    } else if (tag.startsWith("[Variant")) {
-                        isStandardVariant = false;
+                Matcher blackMatcher = blackPattern.matcher(line);
+                if (blackMatcher.find()) {
+                    blackPlayer = blackMatcher.group(1);
+                }
+
+                if (resultPattern.matcher(line).find()) {
+                    resultsMatched++;
+                    if (isRatedClassicalGame && whitePlayer != null && blackPlayer != null) {
+                        gamesCounted++;
+                        final int moveCount = (int) line.chars().filter(ch -> ch == '.').count();
+                        playerMoveCount.put(whitePlayer, playerMoveCount.getOrDefault(whitePlayer, 0) + moveCount);
+                        playerMoveCount.put(blackPlayer, playerMoveCount.getOrDefault(blackPlayer, 0) + moveCount);
                     }
-                }
 
-                if (isRatedClassical && isStandardVariant) {
-                    String whitePlayer = game.getWhite();
-                    String blackPlayer = game.getBlack();
-
-                    playerMoveCount.put(whitePlayer, playerMoveCount.getOrDefault(whitePlayer, 0) + game.getMainLine().length / 2);
-                    playerMoveCount.put(blackPlayer, playerMoveCount.getOrDefault(blackPlayer, 0) + game.getMainLine().length / 2);
+                    isRatedClassicalGame = false;
+                    whitePlayer = null;
+                    blackPlayer = null;
                 }
             }
         }
+        System.out.println(linesRead);
+        System.out.println(resultsMatched);
+        System.out.println(classicalGamesFound);
+        System.out.println(gamesCounted);
 
-        try (FileReader fileReader = new FileReader(inputPath.toFile())) {
-            PGNReader pgnReader = new PGNReader(fileReader, "filename");
+        int results_matched = 0;
+        int games_written = 0;
 
-            try (FileWriter fileWriter = new FileWriter(outputPath.toFile())) {
-                PGNWriter pgnWriter = new PGNWriter(fileWriter);
+        // Second pass: Write filtered games to the output file
+        try (BufferedReader reader = Files.newBufferedReader(inputPath);
+             BufferedWriter writer = Files.newBufferedWriter(outputPath)) {
 
-                Game game;
-                while (true) {
-										try {
-												game = pgnReader.parseGame();
-										} catch (PGNSyntaxError e) {
-												System.err.println("Error parsing game: " + e.getMessage());
-												continue;
-										}
+            String line;
+            StringBuilder gameStringBuilder = new StringBuilder();
+            boolean isRatedClassicalGame = false;
+            String whitePlayer = null;
+            String blackPlayer = null;
 
-										if (game == null) {
-												break;
-										}
+            while ((line = reader.readLine()) != null) {
+                //gameStringBuilder.append(line).append('\n');
+                if (eventPattern.matcher(line).find()) {
+                    isRatedClassicalGame = true;
+                }
 
-                  	String[] tags = game.getTags();
-                    boolean isRatedClassical = false;
-                    boolean isStandardVariant = true;
+                if (variantPattern.matcher(line).find()) {
+                    isRatedClassicalGame = false;
+                }
 
-                    for (String tag : tags) {
-                        if (tag.startsWith("[Event \"Rated Classical game\"]")) {
-                            isRatedClassical = true;
-                        } else if (tag.startsWith("[Variant")) {
-                            isStandardVariant = false;
-                        }
+                Matcher whiteMatcher = whitePattern.matcher(line);
+                if (whiteMatcher.find()) {
+                    gameStringBuilder.append(line).append('\n');
+                    whitePlayer = whiteMatcher.group(1);
+                }
+
+                Matcher blackMatcher = blackPattern.matcher(line);
+                if (blackMatcher.find()) {
+                    gameStringBuilder.append(line).append('\n');
+                    blackPlayer = blackMatcher.group(1);
+                }
+
+                if (resultPattern.matcher(line).find()) {
+                    gameStringBuilder.append(line).append("\n\n");
+                    results_matched++;
+                    if (isRatedClassicalGame && whitePlayer != null && blackPlayer != null &&
+                            (playerMoveCount.getOrDefault(whitePlayer, 0) >= minMoves ||
+                                    playerMoveCount.getOrDefault(blackPlayer, 0) >= minMoves)) {
+                        games_written++;
+                        writer.write(gameStringBuilder.toString());
                     }
 
-                    String whitePlayer = game.getWhite();
-                    String blackPlayer = game.getBlack();
-
-                    if (isRatedClassical && isStandardVariant &&
-                            playerMoveCount.get(whitePlayer) >= minMoves && playerMoveCount.get(blackPlayer) >= minMoves) {
-                        pgnWriter.write(game.getModel());
-                    }
+                    gameStringBuilder.setLength(0);
+                    isRatedClassicalGame = false;
+                    whitePlayer = null;
+                    blackPlayer = null;
                 }
             }
         }
+        System.out.println(results_matched);
+        System.out.println(games_written);
     }
 }
+
