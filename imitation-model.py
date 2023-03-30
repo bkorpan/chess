@@ -135,7 +135,7 @@ class ChessTransformer(nn.Module):
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
-        x = nn.softmax(x, dim=-1)
+        x = nn.Softmax(x, dim=-1)
         return x
 
 # Meta training function
