@@ -43,7 +43,6 @@ def tokenize_board(board):
                     piece_token = 13 if piece.color == chess.WHITE else 16
 
         tokenized_board.append(piece_token)
-
     return tokenized_board
 
 
@@ -53,7 +52,7 @@ def game_to_tokenized_pairs(game):
 
     for move in game.mainline_moves():
         tokenized_board = tokenize_board(board)
-        tokenized_move = 64*move.from_square + move.to_square if !move.promotion else 4096*(move.promotion - 1) + 64*move.from_square + move.to_square
+        tokenized_move = 64*move.from_square + move.to_square if not move.promotion else 4096*(move.promotion - 1) + 64*move.from_square + move.to_square
         tokenized_pairs.append((tokenized_board, tokenized_move))
 
         board.push(move)
@@ -104,7 +103,7 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1, activation="relu"):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation)
 
-    def forward(self, tgt, tgt_mask=None, tgt_key_padding_mask=None):
+    def forward(self, tgt, memory=None, tgt_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
         tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
@@ -114,14 +113,11 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
         return tgt
 
 class ChessTransformer(nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, num_positions=64, move_output_size=4100):
+    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, num_positions=64, move_output_size=20480):
         super(ChessTransformer, self).__init__()
         self.token_embedding = nn.Embedding(num_tokens, d_model)
         self.positional_encoding = self.create_positional_encoding(num_positions, d_model)
-
-        decoder_layer = GPTDecoderLayer(d_model, nhead, dim_feedforward)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers)
-
+        self.transformer_decoder = GPTDecoderLayer(d_model, nhead, dim_feedforward)
         self.final_attention = nn.MultiheadAttention(d_model, nhead)
         self.output_layer = nn.Linear(d_model, move_output_size)
 
@@ -131,16 +127,15 @@ class ChessTransformer(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(64)) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
         return nn.Parameter(pe, requires_grad=False)
 
     def forward(self, x):
         x = self.token_embedding(x) * torch.sqrt(torch.tensor(self.token_embedding.embedding_dim, dtype=torch.float))
-        x = x + self.positional_encoding[:x.size(0), :]
+        x = x + self.positional_encoding
         x = self.transformer_decoder(x)
 
         # Pass the output of the transformer through the output layer
-        x = self.output_layer(x[-1])  # Use the last token's output
+        x = self.output_layer(x[:,-1])  # Use the last token's output
         return x
 
 # Meta training function
@@ -161,8 +156,8 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
         for _ in range(inner_steps):
             for board, move in support_set:
-                board = torch.tensor(board, dtype=torch.long, device=device).unsqueeze(0)
-                move = nn.functional.one_hot(torch.tensor(move)).type(torch.float).to(device).unsqueeze(0)
+                board = torch.tensor(board, dtype=torch.long, device=device)
+                move = nn.functional.one_hot(torch.tensor(move), 20480).type(torch.float).to(device)
 
                 inner_optimizer.zero_grad()
                 output = model_copy(board)
@@ -173,8 +168,8 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
         outer_optimizer.zero_grad()
         outer_loss = 0
         for board, move in query_set:
-            board = torch.tensor(board, dtype=torch.long, device=device).unsqueeze(0)
-            move = nn.functional.one_hot(torch.tensor(move)).type(torch.float).to(device).unsqueeze(0)
+            board = torch.tensor(board, dtype=torch.long, device=device)
+            move = nn.functional.one_hot(torch.tensor(move), 20480).type(torch.float).to(device)
 
             output = model_copy(board)
             loss = nn.BCEWithLogitsLoss()(output, move)
@@ -193,6 +188,7 @@ nhead = 8
 num_layers = 8
 dim_feedforward = 4*d_model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("cuda available: " + str(torch.cuda.is_available()))
 
 # Initialize the model
 model = ChessTransformer(d_model, nhead, num_layers, dim_feedforward).to(device)
@@ -206,21 +202,26 @@ pretraining_set = prepare_pretraining_set(games)
 metatraining_set = prepare_metatraining_set(games)
 
 # Pretrain the model
-pretrain_epochs = 100
+pretrain_epochs = 25
 pretrain_batch_size = 32
 pretrain_lr = 1e-4
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
 pretrain_optimizer = optim.Adam(model.parameters(), lr=pretrain_lr)
 
+print("Starting pretraining")
+
 for epoch in range(pretrain_epochs):
     total_loss = 0
     for i, (board, move) in enumerate(pretrain_loader):
+        #print(list(board.size()))
+        #print(list(move.size()))
         board = board.to(device)
-        move = nn.functional.one_hot(move).to(device)
+        move = nn.functional.one_hot(move, 20480).type(torch.float).to(device)
 
         pretrain_optimizer.zero_grad()
         output = model(board)
+        #print(list(output.size()))
         loss = nn.BCEWithLogitsLoss()(output, move)
         loss.backward()
         pretrain_optimizer.step()
@@ -230,12 +231,14 @@ for epoch in range(pretrain_epochs):
     print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {total_loss / len(pretrain_loader)}")
 
 # MAML train the model
-inner_lr = 1e-2
+inner_lr = 1e-3
 outer_lr = 1e-4
 inner_steps = 10
 num_episodes = 10000
-num_support = 100
-num_query = 100
+num_support = 500
+num_query = 500
+
+print("Starting metatraining")
 
 maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device)
 
