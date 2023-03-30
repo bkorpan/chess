@@ -25,44 +25,24 @@ def tokenize_board(board):
 
     for square in chess.SQUARES:
         piece = board.piece_at(square)
+        piece_token = 0
 
         if piece:
-            piece_str = piece.symbol()
+            piece_token = piece.piece_type if piece.color == chess.WHITE else piece.piece_type + 6
             if piece.piece_type == chess.KING and (
                     board.has_kingside_castling_rights(piece.color) or board.has_queenside_castling_rights(piece.color)):
-                if piece.color == chess.WHITE:
-                    piece_str = piece_str.upper() + "'"
-                else:
-                    piece_str = piece_str.lower() + "'"
+                piece_token = 15 if piece.color == chess.WHITE else 18
             elif piece.piece_type == chess.ROOK:
                 if (piece.color == chess.WHITE and square == chess.H1 and board.has_kingside_castling_rights(piece.color)) or \
                    (piece.color == chess.WHITE and square == chess.A1 and board.has_queenside_castling_rights(piece.color)) or \
                    (piece.color == chess.BLACK and square == chess.H8 and board.has_kingside_castling_rights(piece.color)) or \
                    (piece.color == chess.BLACK and square == chess.A8 and board.has_queenside_castling_rights(piece.color)):
-                    if piece.color == chess.WHITE:
-                        piece_str = piece_str.upper() + "'"
-                    else:
-                        piece_str = piece_str.lower() + "'"
-                else:
-                    if piece.color == chess.WHITE:
-                        piece_str = piece_str.upper()
-                    else:
-                        piece_str = piece_str.lower()
+                    piece_token = 14 if piece.color == chess.WHITE else 17
             elif board.ep_square:
                 if square == board.ep_square:
-                    if piece.color == chess.WHITE:
-                        piece_str = piece_str.upper() + "'"
-                    else:
-                        piece_str = piece_str.lower() + "'"
-            else:
-                if piece.color == chess.WHITE:
-                    piece_str = piece_str.upper()
-                else:
-                    piece_str = piece_str.lower()
-        else:
-            piece_str = '0'
+                    piece_token = 13 if piece.color == chess.WHITE else 16
 
-        tokenized_board.append(piece_str)
+        tokenized_board.append(piece_token)
 
     return tokenized_board
 
@@ -73,7 +53,7 @@ def game_to_tokenized_pairs(game):
 
     for move in game.mainline_moves():
         tokenized_board = tokenize_board(board)
-        tokenized_move = move.uci()
+        tokenized_move = 64*move.from_square + move.to_square if !move.promotion else 4096*(move.promotion - 1) + 64*move.from_square + move.to_square
         tokenized_pairs.append((tokenized_board, tokenized_move))
 
         board.push(move)
@@ -82,24 +62,16 @@ def game_to_tokenized_pairs(game):
 
 
 class ChessDataset(Dataset):
-    def __init__(self, pgn_file, transform=None):
+    def __init__(self, data, transform=None):
         self.transform = transform
-        self.pgn = open(pgn_file)
-        self.games = []
-        while True:
-            game = chess.pgn.read_game(self.pgn)
-            if game is None:
-                break
-            self.games.append(game)
+        self.data = data
 
     def __len__(self):
-        return len(self.games)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        game = self.games[idx]
-        board = game.board()
-        moves = list(game.mainline_moves())
-        return {'board': board.fen(), 'moves': moves}
+        (board, move) = self.data[idx]
+        return torch.tensor(board), torch.tensor(move)
 
 
 def prepare_pretraining_set(games):
@@ -128,14 +100,6 @@ def prepare_metatraining_set(games):
 
 # Model classes
 
-# Define the encoding dictionary
-TOKENS = {
-    'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
-    'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12,
-    'R\'': 13, 'K\'': 14, 'r\'': 15, 'k\'': 16,
-    'P\'': 17, 'p\'': 18, '0': 0
-}
-
 class GPTDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1, activation="relu"):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation)
@@ -150,7 +114,7 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
         return tgt
 
 class ChessTransformer(nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=len(TOKENS), num_positions=64, move_output_size=4100):
+    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, num_positions=64, move_output_size=4100):
         super(ChessTransformer, self).__init__()
         self.token_embedding = nn.Embedding(num_tokens, d_model)
         self.positional_encoding = self.create_positional_encoding(num_positions, d_model)
@@ -196,24 +160,24 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
         inner_optimizer = optim.SGD(model_copy.parameters(), lr=inner_lr)
 
         for _ in range(inner_steps):
-            for board_tokens, move_vector in support_set:
-                board_tokens = torch.tensor(board_tokens, dtype=torch.long, device=device).unsqueeze(0)
-                move_vector = torch.tensor(move_vector, dtype=torch.float, device=device).unsqueeze(0)
+            for board, move in support_set:
+                board = torch.tensor(board, dtype=torch.long, device=device).unsqueeze(0)
+                move = nn.functional.one_hot(torch.tensor(move)).type(torch.float).to(device).unsqueeze(0)
 
                 inner_optimizer.zero_grad()
-                output = model_copy(board_tokens)
-                loss = nn.BCEWithLogitsLoss()(output, move_vector)
+                output = model_copy(board)
+                loss = nn.BCEWithLogitsLoss()(output, move)
                 loss.backward()
                 inner_optimizer.step()
 
         outer_optimizer.zero_grad()
         outer_loss = 0
-        for board_tokens, move_vector in query_set:
-            board_tokens = torch.tensor(board_tokens, dtype=torch.long, device=device).unsqueeze(0)
-            move_vector = torch.tensor(move_vector, dtype=torch.float, device=device).unsqueeze(0)
+        for board, move in query_set:
+            board = torch.tensor(board, dtype=torch.long, device=device).unsqueeze(0)
+            move = nn.functional.one_hot(torch.tensor(move)).type(torch.float).to(device).unsqueeze(0)
 
-            output = model_copy(board_tokens)
-            loss = nn.BCEWithLogitsLoss()(output, move_vector)
+            output = model_copy(board)
+            loss = nn.BCEWithLogitsLoss()(output, move)
             outer_loss += loss.item()
 
         outer_loss /= num_query
@@ -235,29 +199,29 @@ model = ChessTransformer(d_model, nhead, num_layers, dim_feedforward).to(device)
 
 # Load and process the dataset
 pgn_file = 'filtered_games.pgn'
-dataset = load_filtered_games(pgn_file)
+games = load_filtered_games(pgn_file)
 
 # Prepare the pretraining and metatraining sets
-pretraining_set = prepare_pretraining_set(dataset)
-metatraining_set = prepare_metatraining_set(dataset)
+pretraining_set = prepare_pretraining_set(games)
+metatraining_set = prepare_metatraining_set(games)
 
 # Pretrain the model
 pretrain_epochs = 100
 pretrain_batch_size = 32
 pretrain_lr = 1e-4
 
-pretrain_loader = DataLoader(pretraining_set, batch_size=pretrain_batch_size, shuffle=True)
+pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
 pretrain_optimizer = optim.Adam(model.parameters(), lr=pretrain_lr)
 
 for epoch in range(pretrain_epochs):
     total_loss = 0
-    for i, (board_tokens, move_vector) in enumerate(pretrain_loader):
-        board_tokens = board_tokens.to(device)
-        move_vector = move_vector.to(device)
+    for i, (board, move) in enumerate(pretrain_loader):
+        board = board.to(device)
+        move = nn.functional.one_hot(move).to(device)
 
         pretrain_optimizer.zero_grad()
-        output = model(board_tokens)
-        loss = nn.BCEWithLogitsLoss()(output, move_vector)
+        output = model(board)
+        loss = nn.BCEWithLogitsLoss()(output, move)
         loss.backward()
         pretrain_optimizer.step()
 
