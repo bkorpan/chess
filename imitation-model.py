@@ -28,13 +28,37 @@ def tokenize_board(board):
 
         if piece:
             piece_str = piece.symbol()
-            if board.has_castling_rights(piece.color, chess.CASTLING_ROOK_MASK):
-                if piece.piece_type == chess.KING:
+            if piece.piece_type == chess.KING and (
+                    board.has_kingside_castling_rights(piece.color) or board.has_queenside_castling_rights(piece.color)):
+                if piece.color == chess.WHITE:
                     piece_str = piece_str.upper() + "'"
-                elif piece.piece_type == chess.ROOK:
-                    piece_str = piece_str.upper() + "'"
-            if piece.piece_type == chess.PAWN and board.is_double_pawn_push(square):
-                piece_str = piece_str.upper() + "'"
+                else:
+                    piece_str = piece_str.lower() + "'"
+            elif piece.piece_type == chess.ROOK:
+                if (piece.color == chess.WHITE and square == chess.H1 and board.has_kingside_castling_rights(piece.color)) or \
+                   (piece.color == chess.WHITE and square == chess.A1 and board.has_queenside_castling_rights(piece.color)) or \
+                   (piece.color == chess.BLACK and square == chess.H8 and board.has_kingside_castling_rights(piece.color)) or \
+                   (piece.color == chess.BLACK and square == chess.A8 and board.has_queenside_castling_rights(piece.color)):
+                    if piece.color == chess.WHITE:
+                        piece_str = piece_str.upper() + "'"
+                    else:
+                        piece_str = piece_str.lower() + "'"
+                else:
+                    if piece.color == chess.WHITE:
+                        piece_str = piece_str.upper()
+                    else:
+                        piece_str = piece_str.lower()
+            elif board.ep_square:
+                if square == board.ep_square:
+                    if piece.color == chess.WHITE:
+                        piece_str = piece_str.upper() + "'"
+                    else:
+                        piece_str = piece_str.lower() + "'"
+            else:
+                if piece.color == chess.WHITE:
+                    piece_str = piece_str.upper()
+                else:
+                    piece_str = piece_str.lower()
         else:
             piece_str = '0'
 
@@ -43,17 +67,13 @@ def tokenize_board(board):
     return tokenized_board
 
 
-def tokenize_move(move):
-    return chess.square_name(move.from_square) + chess.square_name(move.to_square) + move.promotion_uci_suffix()
-
-
 def game_to_tokenized_pairs(game):
     tokenized_pairs = []
     board = game.board()
 
     for move in game.mainline_moves():
         tokenized_board = tokenize_board(board)
-        tokenized_move = tokenize_move(move)
+        tokenized_move = move.uci()
         tokenized_pairs.append((tokenized_board, tokenized_move))
 
         board.push(move)
@@ -61,20 +81,40 @@ def game_to_tokenized_pairs(game):
     return tokenized_pairs
 
 
-def prepare_pretraining_set(dataset):
+class ChessDataset(Dataset):
+    def __init__(self, pgn_file, transform=None):
+        self.transform = transform
+        self.pgn = open(pgn_file)
+        self.games = []
+        while True:
+            game = chess.pgn.read_game(self.pgn)
+            if game is None:
+                break
+            self.games.append(game)
+
+    def __len__(self):
+        return len(self.games)
+
+    def __getitem__(self, idx):
+        game = self.games[idx]
+        board = game.board()
+        moves = list(game.mainline_moves())
+        return {'board': board.fen(), 'moves': moves}
+
+
+def prepare_pretraining_set(games):
     pretraining_set = []
 
-    for game in dataset:
+    for game in games:
         pretraining_set.extend(game_to_tokenized_pairs(game))
 
-    random.shuffle(pretraining_set)
     return pretraining_set
 
 
-def prepare_metatraining_set(dataset):
+def prepare_metatraining_set(games):
     metatraining_set = defaultdict(list)
 
-    for game in dataset:
+    for game in games:
         white_player = game.headers['White']
         black_player = game.headers['Black']
         game_data = game_to_tokenized_pairs(game)
@@ -202,7 +242,7 @@ pretraining_set = prepare_pretraining_set(dataset)
 metatraining_set = prepare_metatraining_set(dataset)
 
 # Pretrain the model
-pretrain_epochs = 10
+pretrain_epochs = 100
 pretrain_batch_size = 32
 pretrain_lr = 1e-4
 
@@ -228,10 +268,10 @@ for epoch in range(pretrain_epochs):
 # MAML train the model
 inner_lr = 1e-2
 outer_lr = 1e-4
-inner_steps = 5
-num_episodes = 500
-num_support = 10
-num_query = 10
+inner_steps = 10
+num_episodes = 10000
+num_support = 100
+num_query = 100
 
 maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device)
 
