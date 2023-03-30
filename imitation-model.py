@@ -118,7 +118,6 @@ class ChessTransformer(nn.Module):
         self.token_embedding = nn.Embedding(num_tokens, d_model)
         self.positional_encoding = self.create_positional_encoding(num_positions, d_model)
         self.transformer_decoder = GPTDecoderLayer(d_model, nhead, dim_feedforward)
-        self.final_attention = nn.MultiheadAttention(d_model, nhead)
         self.output_layer = nn.Linear(d_model, move_output_size)
 
     def create_positional_encoding(self, max_len, d_model):
@@ -136,6 +135,7 @@ class ChessTransformer(nn.Module):
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
+        x = nn.softmax(x, dim=-1)
         return x
 
 # Meta training function
@@ -161,7 +161,7 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
                 inner_optimizer.zero_grad()
                 output = model_copy(board)
-                loss = nn.BCEWithLogitsLoss()(output, move)
+                loss = nn.BCELoss()(output, move)
                 loss.backward()
                 inner_optimizer.step()
 
@@ -172,7 +172,7 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
             move = nn.functional.one_hot(torch.tensor(move), 20480).type(torch.float).to(device)
 
             output = model_copy(board)
-            loss = nn.BCEWithLogitsLoss()(output, move)
+            loss = nn.BCELoss()(output, move)
             outer_loss += loss.item()
 
         outer_loss /= num_query
@@ -202,8 +202,8 @@ pretraining_set = prepare_pretraining_set(games)
 metatraining_set = prepare_metatraining_set(games)
 
 # Pretrain the model
-pretrain_epochs = 25
-pretrain_batch_size = 32
+pretrain_epochs = 4
+pretrain_batch_size = 64
 pretrain_lr = 1e-4
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
@@ -214,27 +214,26 @@ print("Starting pretraining")
 for epoch in range(pretrain_epochs):
     total_loss = 0
     for i, (board, move) in enumerate(pretrain_loader):
-        #print(list(board.size()))
-        #print(list(move.size()))
         board = board.to(device)
         move = nn.functional.one_hot(move, 20480).type(torch.float).to(device)
 
         pretrain_optimizer.zero_grad()
         output = model(board)
-        #print(list(output.size()))
-        loss = nn.BCEWithLogitsLoss()(output, move)
+        loss = nn.BCELoss()(output, move)
         loss.backward()
         pretrain_optimizer.step()
 
         total_loss += loss.item()
+        if i % 100 == 0:
+            print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}: Loss = {total_loss / (i + 1)}")
 
     print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {total_loss / len(pretrain_loader)}")
 
 # MAML train the model
 inner_lr = 1e-3
 outer_lr = 1e-4
-inner_steps = 10
-num_episodes = 10000
+inner_steps = 2
+num_episodes = 1000
 num_support = 500
 num_query = 500
 
