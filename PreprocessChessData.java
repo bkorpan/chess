@@ -117,7 +117,7 @@ public class PreprocessChessData {
                     gameStringBuilder.append(line).append("\n\n");
                     results_matched++;
                     if (isRatedClassicalGame && whitePlayer != null && blackPlayer != null &&
-                            (playerMoveCount.getOrDefault(whitePlayer, 0) >= minMoves ||
+                            (playerMoveCount.getOrDefault(whitePlayer, 0) >= minMoves &&
                                     playerMoveCount.getOrDefault(blackPlayer, 0) >= minMoves)) {
                         games_written++;
                         writer.write(gameStringBuilder.toString());
