@@ -113,30 +113,47 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
         return tgt
 
 class ChessTransformer(nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, num_positions=64, move_output_size=20480):
+    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, move_output_size=20480):
         super(ChessTransformer, self).__init__()
         self.token_embedding = nn.Embedding(num_tokens, d_model)
-        self.positional_encoding = self.create_positional_encoding(num_positions, d_model)
+        self.positional_encoding = self.positional_encoding_2d(d_model)
         self.transformer_decoder = GPTDecoderLayer(d_model, nhead, dim_feedforward)
         self.output_layer = nn.Linear(d_model, move_output_size)
+        self.num_layers = num_layers
 
-    def create_positional_encoding(self, max_len, d_model):
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(64)) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        return nn.Parameter(pe, requires_grad=False)
+    def positional_encoding_2d(num_features, chessboard_size=(8, 8)):
+        # chessboard_size: tuple of height and width of the chessboard (8, 8)
+        # num_features: number of encoding features (should be even)
+
+        assert num_features % 4 == 0, "num_features should be divisible by 4."
+
+        height, width = chessboard_size
+        encoding = torch.zeros(height, width, num_features)
+
+        # Compute the row (rank) and column (file) position tensors
+        row_position = torch.arange(0, height, dtype=torch.float).unsqueeze(1).repeat(1, width)
+        col_position = torch.arange(0, width, dtype=torch.float).unsqueeze(0).repeat(height, 1)
+
+        # Compute the divisors for the sinusoidal functions
+        div_term = torch.exp(torch.arange(0, num_features // 2, 2).float() * (-torch.log(100) / num_features))
+
+        # Apply the sinusoidal functions to the row and column position tensors
+        encoding[:, :, 0::4] = torch.sin(row_position * div_term)
+        encoding[:, :, 1::4] = torch.cos(row_position * div_term)
+        encoding[:, :, 2::4] = torch.sin(col_position * div_term)
+        encoding[:, :, 3::4] = torch.cos(col_position * div_term)
+
+        return encoding
 
     def forward(self, x):
         x = self.token_embedding(x) * torch.sqrt(torch.tensor(self.token_embedding.embedding_dim, dtype=torch.float))
         x = x + self.positional_encoding
-        x = self.transformer_decoder(x)
+        for i in range(num_layers):
+            x = self.transformer_decoder(x)
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
-        #x = nn.functional.softmax(x, dim=-1)
-        return x
+        return nn.ReLU()(x)
 
 # Meta training function
 def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device):
@@ -184,8 +201,8 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
 # Hyperparameters
 d_model = 256
-nhead = 8
-num_layers = 8
+nhead = 4
+num_layers = 4
 dim_feedforward = 4*d_model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("cuda available: " + str(torch.cuda.is_available()))
@@ -202,8 +219,8 @@ pretraining_set = prepare_pretraining_set(games)
 metatraining_set = prepare_metatraining_set(games)
 
 # Pretrain the model
-pretrain_epochs = 4
-pretrain_batch_size = 64
+pretrain_epochs = 2
+pretrain_batch_size = 16
 pretrain_lr = 1e-4
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
@@ -216,7 +233,7 @@ for epoch in range(pretrain_epochs):
     batch_loss = 0
     for i, (board, move) in enumerate(pretrain_loader):
         if i % 100 == 0 and i != 0:
-            print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}/{len(pretrain_loader)/pretrain_batch_size}: Loss = {batch_loss / 100}")
+            print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}/{len(pretrain_loader)}: Loss = {batch_loss / 100}")
             batch_loss = 0
         
         board = board.to(device)
@@ -233,17 +250,19 @@ for epoch in range(pretrain_epochs):
 
     print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {total_loss / len(pretrain_loader)}")
 
+print("Pretraining complete!")
+
 # MAML train the model
-inner_lr = 1e-3
-outer_lr = 1e-4
-inner_steps = 2
-num_episodes = 1000
-num_support = 500
-num_query = 500
+#inner_lr = 1e-3
+#outer_lr = 1e-4
+#inner_steps = 2
+#num_episodes = 1000
+#num_support = 500
+#num_query = 500
 
-print("Starting metatraining")
+#print("Starting metatraining")
 
-maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device)
+#maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device)
 
 # Save the model
 torch.save(model.state_dict(), 'chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
