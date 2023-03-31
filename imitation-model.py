@@ -135,7 +135,7 @@ class ChessTransformer(nn.Module):
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
-        x = nn.Softmax(x, dim=-1)
+        #x = nn.functional.softmax(x, dim=-1)
         return x
 
 # Meta training function
@@ -161,7 +161,7 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
                 inner_optimizer.zero_grad()
                 output = model_copy(board)
-                loss = nn.BCELoss()(output, move)
+                loss = nn.CrossEntropyLoss()(output, move)
                 loss.backward()
                 inner_optimizer.step()
 
@@ -172,7 +172,7 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
             move = nn.functional.one_hot(torch.tensor(move), 20480).type(torch.float).to(device)
 
             output = model_copy(board)
-            loss = nn.BCELoss()(output, move)
+            loss = nn.CrossEntropyLoss()(output, move)
             outer_loss += loss.item()
 
         outer_loss /= num_query
@@ -213,19 +213,23 @@ print("Starting pretraining")
 
 for epoch in range(pretrain_epochs):
     total_loss = 0
+    batch_loss = 0
     for i, (board, move) in enumerate(pretrain_loader):
+        if i % 100 == 0 and i != 0:
+            print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}/{len(pretrain_loader)/pretrain_batch_size}: Loss = {batch_loss / 100}")
+            batch_loss = 0
+        
         board = board.to(device)
         move = nn.functional.one_hot(move, 20480).type(torch.float).to(device)
 
         pretrain_optimizer.zero_grad()
         output = model(board)
-        loss = nn.BCELoss()(output, move)
+        loss = nn.CrossEntropyLoss()(output, move)
         loss.backward()
         pretrain_optimizer.step()
 
         total_loss += loss.item()
-        if i % 100 == 0:
-            print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}: Loss = {total_loss / (i + 1)}")
+        batch_loss += loss.item()
 
     print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {total_loss / len(pretrain_loader)}")
 
