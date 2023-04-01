@@ -9,10 +9,20 @@ from collections import defaultdict
 
 # Pre-processing functions
 
-def load_filtered_games(pgn_filepath):
+def load_games(pgn_filepath):
     with open(pgn_filepath) as pgn_file:
         games = []
         while True:
+            game = chess.pgn.read_game(pgn_file)
+            if game is None:
+                break
+            games.append(game)
+    return games
+
+def load_n_games(pgn_filepath, n):
+    with open(pgn_filepath) as pgn_file:
+        games = []
+        for i in range(n):
             game = chess.pgn.read_game(pgn_file)
             if game is None:
                 break
@@ -113,29 +123,34 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
         return tgt
 
 class ChessTransformer(nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, move_output_size=20480):
+    def __init__(self, device, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, move_output_size=20480):
         super(ChessTransformer, self).__init__()
+        assert(d_model % 128 == 0)
         self.token_embedding = nn.Embedding(num_tokens, d_model)
-        self.positional_encoding = self.positional_encoding_2d(d_model)
-        self.transformer_decoder = GPTDecoderLayer(d_model, nhead, dim_feedforward)
         self.output_layer = nn.Linear(d_model, move_output_size)
         self.num_layers = num_layers
+        self.dim_feedforward = dim_feedforward
+        self.num_tokens = num_tokens
+        self.device = device
+        self.positional_encoding = self.positional_encoding_2d(d_model)
+        self.one_hot_positional_encoding = nn.Parameter(nn.functional.one_hot(torch.arange(0,64), 64).repeat(1, d_model // 128).type(torch.float).to(device), requires_grad=False)
+        self.decoders = []
+        for i in range(num_layers):
+            self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
 
-    def positional_encoding_2d(num_features, chessboard_size=(8, 8)):
-        # chessboard_size: tuple of height and width of the chessboard (8, 8)
-        # num_features: number of encoding features (should be even)
-
+    def positional_encoding_2d(self, num_features, chessboard_size=(8, 8)):
         assert num_features % 4 == 0, "num_features should be divisible by 4."
 
         height, width = chessboard_size
         encoding = torch.zeros(height, width, num_features)
 
         # Compute the row (rank) and column (file) position tensors
-        row_position = torch.arange(0, height, dtype=torch.float).unsqueeze(1).repeat(1, width)
-        col_position = torch.arange(0, width, dtype=torch.float).unsqueeze(0).repeat(height, 1)
+        row_position = torch.arange(0, height, dtype=torch.float).unsqueeze(1).repeat(1, width).unsqueeze(2)
+        col_position = torch.arange(0, width, dtype=torch.float).unsqueeze(0).repeat(height, 1).unsqueeze(2)
 
         # Compute the divisors for the sinusoidal functions
-        div_term = torch.exp(torch.arange(0, num_features // 2, 2).float() * (-torch.log(100) / num_features))
+        div_term = torch.exp(torch.arange(0, num_features // 2, 2).float() * (-torch.log(torch.tensor(100.)) / num_features))
+        div_term = div_term.view(1, 1, num_features // 4)
 
         # Apply the sinusoidal functions to the row and column position tensors
         encoding[:, :, 0::4] = torch.sin(row_position * div_term)
@@ -143,17 +158,22 @@ class ChessTransformer(nn.Module):
         encoding[:, :, 2::4] = torch.sin(col_position * div_term)
         encoding[:, :, 3::4] = torch.cos(col_position * div_term)
 
-        return encoding
+        return nn.Parameter(encoding.view(height*width, num_features).to(self.device), requires_grad=False)
 
     def forward(self, x):
-        x = self.token_embedding(x) * torch.sqrt(torch.tensor(self.token_embedding.embedding_dim, dtype=torch.float))
-        x = x + self.positional_encoding
+        #x = self.token_embedding(x) + self.positional_encoding
+        x = nn.functional.one_hot(x, self.num_tokens).repeat(1, 1, (d_model // 2) // self.num_tokens).type(torch.float)
+        tmp = nn.functional.pad(x, pad=(0, (d_model // 2) - x.shape[2]))
+        x = torch.zeros(x.shape[0], x.shape[1], d_model).type(torch.float).to(device)
+        for i in range (tmp.shape[0]):
+            x[i] = torch.cat((tmp[i], self.one_hot_positional_encoding), dim=1)
+
         for i in range(num_layers):
-            x = self.transformer_decoder(x)
+            x = self.decoders[i](x)
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
-        return nn.ReLU()(x)
+        return x
 
 # Meta training function
 def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device):
@@ -200,31 +220,33 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
 
 # Hyperparameters
-d_model = 256
+d_model = 128
 nhead = 4
-num_layers = 4
+num_layers = 8
 dim_feedforward = 4*d_model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("cuda available: " + str(torch.cuda.is_available()))
 
+torch.set_printoptions(threshold=65536)
+
 # Initialize the model
-model = ChessTransformer(d_model, nhead, num_layers, dim_feedforward).to(device)
+model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
 # Load and process the dataset
 pgn_file = 'filtered_games.pgn'
-games = load_filtered_games(pgn_file)
+games = load_n_games(pgn_file, 1)
 
 # Prepare the pretraining and metatraining sets
 pretraining_set = prepare_pretraining_set(games)
 metatraining_set = prepare_metatraining_set(games)
 
 # Pretrain the model
-pretrain_epochs = 2
-pretrain_batch_size = 16
-pretrain_lr = 1e-4
+pretrain_epochs = 10000
+pretrain_batch_size = 13
+pretrain_lr = 5e-4
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
-pretrain_optimizer = optim.Adam(model.parameters(), lr=pretrain_lr)
+pretrain_optimizer = optim.SGD(model.parameters(), lr=pretrain_lr)
 
 print("Starting pretraining")
 
@@ -237,7 +259,7 @@ for epoch in range(pretrain_epochs):
             batch_loss = 0
         
         board = board.to(device)
-        move = nn.functional.one_hot(move, 20480).type(torch.float).to(device)
+        move = move.to(device)
 
         pretrain_optimizer.zero_grad()
         output = model(board)
