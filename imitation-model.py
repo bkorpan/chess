@@ -111,7 +111,7 @@ def prepare_metatraining_set(games):
 
 class GPTDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1, activation="relu"):
-        super().__init__(d_model, nhead, dim_feedforward, dropout, activation)
+        super().__init__(d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
 
     def forward(self, tgt, memory=None, tgt_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
         tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)[0]
@@ -135,8 +135,9 @@ class ChessTransformer(nn.Module):
         self.positional_encoding = self.positional_encoding_2d(d_model)
         self.one_hot_positional_encoding = nn.Parameter(nn.functional.one_hot(torch.arange(0,64), 64).repeat(1, d_model // 128).type(torch.float).to(device), requires_grad=False)
         self.decoders = []
-        for i in range(num_layers):
-            self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
+        #for i in range(num_layers):
+        #    self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
+        self.transformer = nn.Transformer(d_model, nhead, num_layers, num_layers, dim_feedforward, batch_first=True)
 
     def positional_encoding_2d(self, num_features, chessboard_size=(8, 8)):
         assert num_features % 4 == 0, "num_features should be divisible by 4."
@@ -168,8 +169,10 @@ class ChessTransformer(nn.Module):
         for i in range (tmp.shape[0]):
             x[i] = torch.cat((tmp[i], self.one_hot_positional_encoding), dim=1)
 
-        for i in range(num_layers):
-            x = self.decoders[i](x)
+        #for i in range(num_layers):
+        #    x = self.decoders[i](x)
+
+        x = self.transformer(x, x)
 
         # Pass the output of the transformer through the output layer
         x = self.output_layer(x[:,-1])  # Use the last token's output
@@ -220,8 +223,8 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
 
 # Hyperparameters
-d_model = 128
-nhead = 4
+d_model = 512
+nhead = 8
 num_layers = 8
 dim_feedforward = 4*d_model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -238,20 +241,23 @@ games = load_n_games(pgn_file, 1)
 
 # Prepare the pretraining and metatraining sets
 pretraining_set = prepare_pretraining_set(games)
-metatraining_set = prepare_metatraining_set(games)
+#metatraining_set = prepare_metatraining_set(games)
+
+print(len(pretraining_set))
 
 # Pretrain the model
-pretrain_epochs = 10000
-pretrain_batch_size = 13
-pretrain_lr = 5e-4
+pretrain_epochs = 1000
+pretrain_batch_size = 25
+pretrain_lr = 1e-3
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
-pretrain_optimizer = optim.SGD(model.parameters(), lr=pretrain_lr)
+pretrain_optimizer = optim.Adam(model.parameters(), lr=pretrain_lr)
+#scheduler = torch.optim.lr_scheduler.ExponentialLR(pretrain_optimizer, gamma=0.99)
 
 print("Starting pretraining")
 
 for epoch in range(pretrain_epochs):
-    total_loss = 0
+    epoch_loss = 0
     batch_loss = 0
     for i, (board, move) in enumerate(pretrain_loader):
         if i % 100 == 0 and i != 0:
@@ -267,10 +273,16 @@ for epoch in range(pretrain_epochs):
         loss.backward()
         pretrain_optimizer.step()
 
-        total_loss += loss.item()
+        epoch_loss += loss.item()
         batch_loss += loss.item()
 
-    print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {total_loss / len(pretrain_loader)}")
+    #scheduler.step()
+
+    print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {epoch_loss / len(pretrain_loader)}")
+
+#for name, param in model.decoders[0].named_parameters():
+#    print(f"Gradients of {name}:")
+#    print(param.grad)
 
 print("Pretraining complete!")
 
