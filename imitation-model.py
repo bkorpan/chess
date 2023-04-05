@@ -6,6 +6,7 @@ import chess.pgn
 import random
 import numpy as np
 from collections import defaultdict
+import math
 
 # Pre-processing functions
 
@@ -113,31 +114,32 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
     def __init__(self, d_model, nhead, dim_feedforward, dropout=0.1, activation="relu"):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
 
-    def forward(self, tgt, memory=None, tgt_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
-        tgt2 = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, key_padding_mask=tgt_key_padding_mask)[0]
+    def forward(self, tgt):
+        tgt2, attn = self.self_attn(tgt, tgt, tgt)
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
-        return tgt
+        return tgt, attn
 
 class ChessTransformer(nn.Module):
     def __init__(self, device, d_model, nhead, num_layers, dim_feedforward, num_tokens=19, move_output_size=20480):
         super(ChessTransformer, self).__init__()
         assert(d_model % 128 == 0)
         self.token_embedding = nn.Embedding(num_tokens, d_model)
+        self.reduce_output = nn.Linear(d_model*64, d_model)
+        self.output_activation = nn.ReLU()
         self.output_layer = nn.Linear(d_model, move_output_size)
         self.num_layers = num_layers
         self.dim_feedforward = dim_feedforward
         self.num_tokens = num_tokens
         self.device = device
         self.positional_encoding = self.positional_encoding_2d(d_model)
-        self.one_hot_positional_encoding = nn.Parameter(nn.functional.one_hot(torch.arange(0,64), 64).repeat(1, d_model // 128).type(torch.float).to(device), requires_grad=False)
+        #self.one_hot_positional_encoding = nn.Parameter(nn.functional.one_hot(torch.arange(0,64), 64).repeat(1, d_model // 128).type(torch.float).to(device), requires_grad=False)
         self.decoders = []
-        #for i in range(num_layers):
-        #    self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
-        self.transformer = nn.Transformer(d_model, nhead, num_layers, num_layers, dim_feedforward, batch_first=True)
+        for i in range(num_layers):
+            self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
 
     def positional_encoding_2d(self, num_features, chessboard_size=(8, 8)):
         assert num_features % 4 == 0, "num_features should be divisible by 4."
@@ -162,21 +164,23 @@ class ChessTransformer(nn.Module):
         return nn.Parameter(encoding.view(height*width, num_features).to(self.device), requires_grad=False)
 
     def forward(self, x):
-        #x = self.token_embedding(x) + self.positional_encoding
-        x = nn.functional.one_hot(x, self.num_tokens).repeat(1, 1, (d_model // 2) // self.num_tokens).type(torch.float)
-        tmp = nn.functional.pad(x, pad=(0, (d_model // 2) - x.shape[2]))
-        x = torch.zeros(x.shape[0], x.shape[1], d_model).type(torch.float).to(device)
-        for i in range (tmp.shape[0]):
-            x[i] = torch.cat((tmp[i], self.one_hot_positional_encoding), dim=1)
+        x = self.token_embedding(x) + self.positional_encoding
+        #x = nn.functional.one_hot(x, self.num_tokens).repeat(1, 1, (d_model // 2) // self.num_tokens).type(torch.float)
+        #tmp = nn.functional.pad(x, pad=(0, (d_model // 2) - x.shape[2]))
+        #x = torch.zeros(x.shape[0], x.shape[1], d_model).type(torch.float).to(device)
+        #for i in range (tmp.shape[0]):
+        #    x[i] = torch.cat((tmp[i], self.one_hot_positional_encoding), dim=1)
 
-        #for i in range(num_layers):
-        #    x = self.decoders[i](x)
+        x, attn = self.decoders[0](x)
 
-        x = self.transformer(x, x)
+        for i in range(1,num_layers):
+            x, _ = self.decoders[i](x)
 
         # Pass the output of the transformer through the output layer
-        x = self.output_layer(x[:,-1])  # Use the last token's output
-        return x
+        x = self.reduce_output(x.view(x.shape[0], x.shape[1]*x.shape[2]))
+        x = self.output_layer(x)
+        #x = self.output_layer(x[:,-1])  # Use the last token's output
+        return x, attn
 
 # Meta training function
 def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_episodes, num_support, num_query, device):
@@ -210,7 +214,6 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
         for board, move in query_set:
             board = torch.tensor(board, dtype=torch.long, device=device)
             move = nn.functional.one_hot(torch.tensor(move), 20480).type(torch.float).to(device)
-
             output = model_copy(board)
             loss = nn.CrossEntropyLoss()(output, move)
             outer_loss += loss.item()
@@ -223,7 +226,7 @@ def maml_train(model, metatraining_set, inner_lr, outer_lr, inner_steps, num_epi
 
 
 # Hyperparameters
-d_model = 512
+d_model = 128
 nhead = 8
 num_layers = 8
 dim_feedforward = 4*d_model
@@ -237,22 +240,22 @@ model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to
 
 # Load and process the dataset
 pgn_file = 'filtered_games.pgn'
-games = load_n_games(pgn_file, 1)
+games = load_n_games(pgn_file, 30000)
 
 # Prepare the pretraining and metatraining sets
 pretraining_set = prepare_pretraining_set(games)
 #metatraining_set = prepare_metatraining_set(games)
 
-print(len(pretraining_set))
+print(f"Num samples = {len(pretraining_set)}")
 
 # Pretrain the model
-pretrain_epochs = 1000
-pretrain_batch_size = 25
-pretrain_lr = 1e-3
+pretrain_epochs = 10
+pretrain_batch_size = 256
+pretrain_lr = 5e-4
 
 pretrain_loader = DataLoader(ChessDataset(pretraining_set), batch_size=pretrain_batch_size, shuffle=True)
 pretrain_optimizer = optim.Adam(model.parameters(), lr=pretrain_lr)
-#scheduler = torch.optim.lr_scheduler.ExponentialLR(pretrain_optimizer, gamma=0.99)
+scheduler = torch.optim.lr_scheduler.ExponentialLR(pretrain_optimizer, gamma=0.997)
 
 print("Starting pretraining")
 
@@ -263,12 +266,13 @@ for epoch in range(pretrain_epochs):
         if i % 100 == 0 and i != 0:
             print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}/{len(pretrain_loader)}: Loss = {batch_loss / 100}")
             batch_loss = 0
+            scheduler.step()
         
         board = board.to(device)
         move = move.to(device)
 
         pretrain_optimizer.zero_grad()
-        output = model(board)
+        output, attn = model(board)
         loss = nn.CrossEntropyLoss()(output, move)
         loss.backward()
         pretrain_optimizer.step()
@@ -276,7 +280,16 @@ for epoch in range(pretrain_epochs):
         epoch_loss += loss.item()
         batch_loss += loss.item()
 
-    #scheduler.step()
+        #if epoch == pretrain_epochs-1:
+            #for j in range(pretrain_batch_size):
+            #    np = 0
+            #    print(f"Sample {j}:\n")
+            #    for k in range(20480):
+            #        if output[j, k] > 0:
+            #            print(f"P({k} | {j}) = {output[j, k]}\n")
+            #print(attn.shape)
+            #print(attn[0])
+
 
     print(f"Epoch {epoch + 1}/{pretrain_epochs}: Loss = {epoch_loss / len(pretrain_loader)}")
 
