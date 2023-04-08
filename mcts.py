@@ -1,5 +1,6 @@
 import torch
 import chess
+import random
 import numpy as np
 from collections import defaultdict
 from chess_util import tokenize_board, move_to_index
@@ -26,7 +27,9 @@ def mcts(model, root, board, num_simulations, device, cpuct=1):
         node = select(root, board, cpuct)
         value = expand_and_evaluate(node, board, model, device)
         backpropagate(node, value, board)
-    return max(root.children.items(), key=lambda item: item[1].visits)[0]
+    max_visits = max(root.children.items(), key=lambda item: item[1].visits)[1].visits
+    children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
+    return random.choice(children_with_max_visits)[0]
 
 def select(node, board, cpuct):
     while node.expanded():
@@ -41,12 +44,15 @@ def expand_and_evaluate(node, board, model, device):
 
     board_tensor = torch.tensor(tokenize_board(board)).unsqueeze(0).to(device)
     policy, value = model(board_tensor)
-    policy = policy[0].detach().numpy()
+    policy = torch.nn.Softmax(dim=-1)(policy)
+    value = torch.nn.Softmax(dim=-1)(value)
+    policy = policy[0].cpu().detach().numpy()
+    value = value[0].cpu().detach().numpy()
 
     for move in legal_moves:
         node.children[move] = Node(parent=node, prior=policy[move_to_index(board, move)])
 
-    return (value[0, 2] - value[0, 0]).item()
+    return value[2] - value[0]
 
 def backpropagate(node, value, board):
     while node is not None:
