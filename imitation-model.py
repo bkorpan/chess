@@ -267,7 +267,7 @@ for epoch in range(pretrain_epochs):
             print(f"Epoch {epoch + 1}/{pretrain_epochs}, Batch {i}/{len(pretrain_loader)}: Loss = {batch_loss / 100}")
             batch_loss = 0
             scheduler.step()
-        
+
         board = board.to(device)
         move = move.to(device)
 
