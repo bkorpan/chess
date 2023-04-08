@@ -42,16 +42,19 @@ def compute_move_probabilities(root, game_moves):
     node = root
 
     for game_move in game_moves:
-        legal_moves = list(state.legal_moves)
+        legal_moves = list(node.children.keys())
 
         move_probs = np.zeros(len(legal_moves))
         for idx, move in enumerate(legal_moves):
             move_probs[idx] = node.children[move].visits
 
-        move_probs /= move_probs.sum()
+        if (move_probs.sum() > 0):
+            move_probs /= move_probs.sum()
+        else:
+            move_probs = np.ones(len(legal_moves)) / len(legal_moves)
         move_probabilities.append(zip(legal_moves, move_probs))
 
-        node = root.children[game_move]
+        node = node.children[game_move]
 
     return move_probabilities
 

@@ -1,3 +1,4 @@
+import torch
 from torch.utils.data import Dataset
 import chess
 
@@ -14,7 +15,7 @@ class SelfPlayDataset(Dataset):
         moves_vec = torch.zeros(4096 + 88 + 2, dtype=torch.float)
         for move, prob in move_probs:
             moves_vec[move_to_index(board, move)] = prob
-        return torch.tensor(tokenize_board(board)), move_vec, torch.tensor(outcome)
+        return torch.tensor(tokenize_board(board)), moves_vec, torch.tensor(outcome)
 
 def move_to_index(board, move):
     if board.is_kingside_castling(move):
