@@ -4,16 +4,15 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import chess
-from self_play import self_play
+from self_play import self_play, self_play_batched
 from models import ChessTransformer
 from chess_util import SelfPlayDataset
 
 def train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device):
-    num_simulations = 0
+    num_simulations = 1
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
-        num_simulations = min(num_simulations + 1, num_simulations_max)
-        data = self_play(model, num_games, num_simulations, device)
+        data = self_play_batched(model, num_games, num_simulations, batch_size, device)
         print(f"Num samples: {len(data)}")
         loader = DataLoader(SelfPlayDataset(data), batch_size=batch_size, shuffle=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -52,6 +51,8 @@ def train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, l
 
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
+        num_simulations = min(num_simulations + 3, num_simulations_max)
+
 # Hyperparameters
 d_model = 128
 nhead = 8
@@ -60,7 +61,7 @@ dim_feedforward = 4*d_model
 
 # Self-play parameters
 num_rounds = 100
-num_games = 10
+num_games = 256
 num_simulations_max = 100
 
 # Training parameters
