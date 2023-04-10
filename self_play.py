@@ -1,7 +1,8 @@
 import copy
-from mcts import mcts, mcts_batched, Node
+from mcts import mcts, mcts_batched, mcts_async, Node
 import numpy as np
 import chess
+import asyncio
 
 def self_play(model, num_games, num_simulations, device, cpuct=1):
     game_data = []
@@ -101,6 +102,37 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
             game_moves = game_moves_tmp
 
             in_progress_games = updated_in_progress_games
+
+    return game_data
+
+async def self_play_async(model, num_games, num_simulations, device, cpuct=1):
+    game_data = []
+
+    async def play_game(model, num_simulations, cpuct):
+        nonlocal game_data
+        root = Node()
+        node = root
+        board = chess.Board()
+        game_states = []
+        game_moves = []
+
+        while not board.is_game_over():
+            game_states.append(copy.deepcopy(board))
+            move = await mcts_async(model, node, board, num_simulations, device, cpuct)
+            board.push(move)
+            node = node.children[move]
+            node.parent = None
+            game_moves.append(move)
+
+        winner_value = compute_winner_value(board)
+        move_probabilities = compute_move_probabilities(root, game_moves)
+
+        for state, probs in zip(game_states, move_probabilities):
+            game_data.append((state, probs, winner_value))
+            winner_value = -winner_value
+
+    tasks = [play_game(model, num_simulations, cpuct) for _ in range(num_games)]
+    await asyncio.gather(*tasks)
 
     return game_data
 
