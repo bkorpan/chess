@@ -46,6 +46,15 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, device, cpuc
         moves.append(random.choice(children_with_max_visits)[0])
     return moves
 
+async def mcts_async(model, root, board, num_simulations, device, cpuct=1):
+    for _ in range(num_simulations):
+        node = select(root, board, cpuct)
+        value = await expand_and_evaluate_async(node, board, model, device)
+        backpropagate(node, value, board)
+    max_visits = max(root.children.items(), key=lambda item: item[1].visits)[1].visits
+    children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
+    return random.choice(children_with_max_visits)[0]
+
 def select(node, board, cpuct):
     while node.expanded():
         move, node = max(node.children.items(), key=lambda item: uct(item[1], cpuct))
@@ -91,6 +100,27 @@ def expand_and_evaluate_batched(nodes, boards, batch_size, model, device):
                 nodes[idx].children[move] = Node(parent=nodes[idx], prior=policy[idx, move_to_index(boards[idx], move)])
 
     return values
+
+async def expand_and_evaluate_async(node, board, model, device):
+    legal_moves = list(board.legal_moves)
+    if not legal_moves:
+        return -1 if board.is_checkmate() else 0
+
+    policy, value = await model_async_call(model, tokenize_board(board))
+
+    for move in legal_moves:
+        node.children[move] = Node(parent=node, prior=policy[move_to_index(board, move)])
+
+    return value[2] - value[0]
+
+async def model_async_call(model, encoded_board):
+    encoded_board = torch.tensor(encoded_board).unsqueeze(0).to(device=model.device, non_blocking=True)
+    policy, value = model(encoded_board)
+    policy = torch.nn.Softmax(dim=-1)(policy)
+    value = torch.nn.Softmax(dim=-1)(value)
+    policy = policy.detach().cpu().to(non_blocking=True).numpy()
+    value = value.detach().cpu().to(non_blocking=True).numpy()
+    return policy[0], value[0]
 
 def backpropagate(node, value, board):
     while node is not None:
