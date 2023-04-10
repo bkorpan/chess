@@ -61,11 +61,11 @@ dim_feedforward = 4*d_model
 
 # Self-play parameters
 num_rounds = 100
-num_games = 256
+num_games = 512
 num_simulations_max = 100
 
 # Training parameters
-epochs = 10
+epochs = 1
 lr = 5e-4
 batch_size = 256
 
@@ -79,3 +79,5 @@ torch.set_printoptions(threshold=65536)
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
 train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device)
+
+torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
