@@ -84,7 +84,7 @@ def expand_and_evaluate_batched(nodes, boards, batch_size, model, device):
     for idx in range(batch_size):
         legal_moves = list(boards[idx].legal_moves)
         if not legal_moves:
-            values.append(-1 if board.is_checkmate() else 0)
+            values.append(-1 if boards[idx].is_checkmate() else 0)
         else:
             values.append(value[idx, 2] - value[idx, 0])
             for move in legal_moves:

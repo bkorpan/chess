@@ -44,6 +44,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
     game_moves = [[] for _ in range(batch_size)]
 
     while completed_games < num_games:
+        #print(f"In progress games = {in_progress_games}")
         moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, device, cpuct)
 
         for idx in range(in_progress_games):
