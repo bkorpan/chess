@@ -14,6 +14,7 @@ async def train_self_play(model, num_rounds, num_games, num_simulations_max, epo
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
         data = await self_play_async(model, num_games, num_simulations, batch_size, device)
+        #data = self_play(model, num_games, num_simulations, batch_size, device)
         print(f"Num samples: {len(data)}")
         loader = DataLoader(SelfPlayDataset(data), batch_size=batch_size, shuffle=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -80,5 +81,6 @@ torch.set_printoptions(threshold=65536)
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device=device, non_blocking=True)
 
 asyncio.run(train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device))
+#train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device)
 
 torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')

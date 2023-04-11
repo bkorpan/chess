@@ -108,13 +108,15 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
 async def self_play_async(model, num_games, num_simulations, device, cpuct=1):
     game_data = []
 
-    async def play_game(model, num_simulations, cpuct):
+    async def play_game(model, num_simulations, cpuct, game_number):
         nonlocal game_data
         root = Node()
         node = root
         board = chess.Board()
         game_states = []
         game_moves = []
+
+        print(f"Starting game {game_number}")
 
         while not board.is_game_over():
             game_states.append(copy.deepcopy(board))
@@ -123,6 +125,8 @@ async def self_play_async(model, num_games, num_simulations, device, cpuct=1):
             node = node.children[move]
             node.parent = None
             game_moves.append(move)
+        
+        print(f"Completed game {game_number}")
 
         winner_value = compute_winner_value(board)
         move_probabilities = compute_move_probabilities(root, game_moves)
@@ -131,7 +135,7 @@ async def self_play_async(model, num_games, num_simulations, device, cpuct=1):
             game_data.append((state, probs, winner_value))
             winner_value = -winner_value
 
-    tasks = [play_game(model, num_simulations, cpuct) for _ in range(num_games)]
+    tasks = [asyncio.create_task(play_game(model, num_simulations, cpuct, game_number)) for game_number in range(num_games)]
     await asyncio.gather(*tasks)
 
     return game_data
