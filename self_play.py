@@ -2,7 +2,6 @@ import copy
 from mcts import mcts, mcts_batched, mcts_async, Node
 import numpy as np
 import chess
-import asyncio
 
 def self_play(model, num_games, num_simulations, device, cpuct=1):
     game_data = []
@@ -105,38 +104,49 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
 
     return game_data
 
-async def self_play_async(model, num_games, num_simulations, device, cpuct=1):
+def self_play_async(model, num_games, num_simulations, num_instances, device, cpuct=1):
     game_data = []
+    completed_games = 0
+    outstanding_games = num_games - num_instances
+    assert(num_games >= num_instances)
 
-    async def play_game(model, num_simulations, cpuct, game_number):
-        nonlocal game_data
-        root = Node()
-        node = root
-        board = chess.Board()
-        game_states = []
-        game_moves = []
+    roots = [Node() for _ in range(num_instances)]
+    nodes = roots.copy()
+    boards = [chess.Board() for _ in range(num_instances)]
+    game_states = [[] for _ in range(num_instances)]
+    game_moves = [[] for _ in range(num_instances)]
 
-        print(f"Starting game {game_number}")
+    while completed_games < num_games:
+        moves = mcts_async(model, nodes, boards, num_simulations, num_instances, device, cpuct)
 
-        while not board.is_game_over():
-            game_states.append(copy.deepcopy(board))
-            move = await mcts_async(model, node, board, num_simulations, device, cpuct)
-            board.push(move)
-            node = node.children[move]
-            node.parent = None
-            game_moves.append(move)
-        
-        print(f"Completed game {game_number}")
+        for idx in range(num_instances):
+            if roots[idx]:
+                game_states[idx].append(copy.deepcopy(boards[idx]))
+                boards[idx].push(moves[idx])
+                nodes[idx] = nodes[idx].children[moves[idx]]
+                nodes[idx].parent = None
+                game_moves[idx].append(moves[idx])
 
-        winner_value = compute_winner_value(board)
-        move_probabilities = compute_move_probabilities(root, game_moves)
+                if boards[idx].is_game_over():
+                    winner_value = compute_winner_value(boards[idx])
+                    move_probabilities = compute_move_probabilities(roots[idx], game_moves[idx])
+                    for state, probs in zip(game_states[idx], move_probabilities):
+                        game_data.append((state, probs, winner_value))
+                        winner_value = -winner_value
 
-        for state, probs in zip(game_states, move_probabilities):
-            game_data.append((state, probs, winner_value))
-            winner_value = -winner_value
+                    if outstanding_games > 0:
+                        roots[idx] = Node()
+                        nodes[idx] = roots[idx]
+                        boards[idx] = chess.Board()
+                        game_states[idx] = []
+                        game_moves[idx] = []
+                        outstanding_games -= 1
+                    else:
+                        roots[idx] = None
 
-    tasks = [asyncio.create_task(play_game(model, num_simulations, cpuct, game_number)) for game_number in range(num_games)]
-    await asyncio.gather(*tasks)
+                    completed_games += 1
+                    if completed_games % 100 == 0:
+                        print(f"Completed {completed_games} games")
 
     return game_data
 
