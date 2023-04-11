@@ -118,9 +118,9 @@ async def model_async_call(model, encoded_board):
     policy, value = model(encoded_board)
     policy = torch.nn.Softmax(dim=-1)(policy)
     value = torch.nn.Softmax(dim=-1)(value)
-    policy = policy.detach().cpu().to(non_blocking=True).numpy()
-    value = value.detach().cpu().to(non_blocking=True).numpy()
-    return policy[0], value[0]
+    policy = await policy.detach().cpu().to(non_blocking=True)
+    value = await value.detach().cpu().to(non_blocking=True)
+    return policy[0].numpy(), value[0].numpy()
 
 def backpropagate(node, value, board):
     while node is not None:
