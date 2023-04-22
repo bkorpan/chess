@@ -4,6 +4,7 @@ import random
 import numpy as np
 from collections import defaultdict
 from chess_util import tokenize_board, move_to_index
+import time
 
 class Node:
     def __init__(self, parent=None, prior=0):
@@ -63,13 +64,19 @@ def mcts_async(model, roots, boards, num_simulations, num_instances, device, cpu
                     nodes[idx].children[move] = Node(parent=nodes[idx], prior=policy[move_to_index(boards[idx], move)])
                 backpropagate(nodes[idx], scalar_value, boards[idx])
             if sim < num_simulations:
+                print(f"A: {round((time.time()*1000)) % 1000}")
                 nodes[idx] = select(roots[idx], boards[idx], cpuct)
-                board_tensor = torch.tensor(tokenize_board(boards[idx])).unsqueeze(0).to(device)
+                print(f"B: {round((time.time()*1000)) % 1000}")
+                board_tensor = torch.tensor(tokenize_board(boards[idx])).unsqueeze(0).to(device, non_blocking=True)
+                print(f"C: {round((time.time()*1000)) % 1000}")
                 policy, value = model(board_tensor)
+                print(f"D: {round((time.time()*1000)) % 1000}")
                 policy = torch.nn.Softmax(dim=-1)(policy)
                 value = torch.nn.Softmax(dim=-1)(value)
-                policies[idx] = policy.cpu()
-                values[idx] = value.cpu()
+                print(f"E: {round((time.time()*1000)) % 1000}")
+                policies[idx] = policy.to(device="cpu", non_blocking=True)
+                values[idx] = value.to(device="cpu", non_blocking=True)
+                print(f"F: {round((time.time()*1000)) % 1000}")
     moves = [None]*num_instances
     for idx in range(num_instances):
         max_visits = max(roots[idx].children.items(), key=lambda item: item[1].visits)[1].visits
