@@ -3,7 +3,7 @@ from mcts import mcts, mcts_batched, mcts_async, Node
 import numpy as np
 import chess
 
-def self_play(model, num_games, num_simulations, device, cpuct=1):
+def self_play(model, num_games, num_simulations, cpuct=1):
     game_data = []
 
     for game in range(num_games):
@@ -17,7 +17,7 @@ def self_play(model, num_games, num_simulations, device, cpuct=1):
 
         while not board.is_game_over():
             game_states.append(copy.deepcopy(board))
-            move = mcts(model, node, board, num_simulations, device, cpuct)
+            move = mcts(model, node, board, num_simulations, cpuct)
             board.push(move)
             node = node.children[move]
             node.parent = None
@@ -32,7 +32,36 @@ def self_play(model, num_games, num_simulations, device, cpuct=1):
 
     return game_data
 
-def self_play_batched(model, num_games, num_simulations, batch_size, device, cpuct=1):
+def self_play_threaded(model, num_games, num_simulations, cpuct=1):
+    game_data = []
+
+    for game in range(num_games):
+        print(f"Starting game {game+1}")
+
+        root = Node()
+        node = root
+        board = chess.Board()
+        game_states = []
+        game_moves = []
+
+        while not board.is_game_over():
+            game_states.append(copy.deepcopy(board))
+            move = mcts(model, node, board, num_simulations, cpuct)
+            board.push(move)
+            node = node.children[move]
+            node.parent = None
+            game_moves.append(move)
+
+        winner_value = compute_winner_value(board)
+        move_probabilities = compute_move_probabilities(root, game_moves)
+
+        for state, probs in zip(game_states, move_probabilities):
+            game_data.append((state, probs, winner_value))
+            winner_value = -winner_value
+
+    return game_data
+
+def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
     game_data = []
     completed_games = 0
     in_progress_games = min(num_games, batch_size)
@@ -45,7 +74,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
 
     while completed_games < num_games:
         #print(f"In progress games = {in_progress_games}")
-        moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, device, cpuct)
+        moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, cpuct)
 
         for idx in range(in_progress_games):
             game_states[idx].append(copy.deepcopy(boards[idx]))
@@ -104,7 +133,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, device, cpu
 
     return game_data
 
-def self_play_async(model, num_games, num_simulations, num_instances, device, cpuct=1):
+def self_play_async(model, num_games, num_simulations, num_instances, cpuct=1):
     game_data = []
     completed_games = 0
     outstanding_games = num_games - num_instances
@@ -117,7 +146,7 @@ def self_play_async(model, num_games, num_simulations, num_instances, device, cp
     game_moves = [[] for _ in range(num_instances)]
 
     while completed_games < num_games:
-        moves = mcts_async(model, nodes, boards, num_simulations, num_instances, device, cpuct)
+        moves = mcts_async(model, nodes, boards, num_simulations, num_instances, cpuct)
 
         for idx in range(num_instances):
             if roots[idx]:
