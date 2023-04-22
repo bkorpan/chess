@@ -23,21 +23,21 @@ class Node:
         return self.value_sum / self.visits
 
 
-def mcts(model, root, board, num_simulations, device, cpuct=1):
+def mcts(model, root, board, num_simulations, cpuct=1):
     for _ in range(num_simulations):
         node = select(root, board, cpuct)
-        value = expand_and_evaluate(node, board, model, device)
+        value = expand_and_evaluate(node, board, model)
         backpropagate(node, value, board)
     max_visits = max(root.children.items(), key=lambda item: item[1].visits)[1].visits
     children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
     return random.choice(children_with_max_visits)[0]
 
-def mcts_batched(model, roots, boards, num_simulations, batch_size, device, cpuct=1):
+def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1):
     for _ in range(num_simulations):
         nodes = []
         for idx in range(batch_size):
             nodes.append(select(roots[idx], boards[idx], cpuct))
-        values = expand_and_evaluate_batched(nodes, boards, batch_size, model, device)
+        values = expand_and_evaluate_batched(nodes, boards, batch_size, model)
         for idx in range(batch_size):
             backpropagate(nodes[idx], values[idx], boards[idx])
     moves = []
@@ -47,7 +47,7 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, device, cpuc
         moves.append(random.choice(children_with_max_visits)[0])
     return moves
 
-def mcts_async(model, roots, boards, num_simulations, num_instances, device, cpuct=1):
+def mcts_async(model, roots, boards, num_simulations, num_instances, cpuct=1):
     nodes = roots
     policies = torch.empty((num_instances, 4096+88+2), dtype=torch.float)
     values = torch.empty((num_instances, 3), dtype=torch.float)
@@ -67,7 +67,7 @@ def mcts_async(model, roots, boards, num_simulations, num_instances, device, cpu
                 print(f"A: {round((time.time()*1000)) % 1000}")
                 nodes[idx] = select(roots[idx], boards[idx], cpuct)
                 print(f"B: {round((time.time()*1000)) % 1000}")
-                board_tensor = torch.tensor(tokenize_board(boards[idx])).unsqueeze(0).to(device, non_blocking=True)
+                board_tensor = torch.tensor(tokenize_board(boards[idx])).unsqueeze(0).to(model.device, non_blocking=True)
                 print(f"C: {round((time.time()*1000)) % 1000}")
                 policy, value = model(board_tensor)
                 print(f"D: {round((time.time()*1000)) % 1000}")
@@ -90,12 +90,12 @@ def select(node, board, cpuct):
         board.push(move)
     return node
 
-def expand_and_evaluate(node, board, model, device):
+def expand_and_evaluate(node, board, model):
     legal_moves = list(board.legal_moves)
     if not legal_moves:
         return -1 if board.is_checkmate() else 0
 
-    board_tensor = torch.tensor(tokenize_board(board)).unsqueeze(0).to(device)
+    board_tensor = torch.tensor(tokenize_board(board)).unsqueeze(0).to(model.device)
     policy, value = model(board_tensor)
     policy = torch.nn.Softmax(dim=-1)(policy)
     value = torch.nn.Softmax(dim=-1)(value)
@@ -107,11 +107,11 @@ def expand_and_evaluate(node, board, model, device):
 
     return value[2] - value[0]
 
-def expand_and_evaluate_batched(nodes, boards, batch_size, model, device):
+def expand_and_evaluate_batched(nodes, boards, batch_size, model):
     tokenized_boards = []
     for idx in range(batch_size):
         tokenized_boards.append(tokenize_board(boards[idx]))
-    boards_tensor = torch.tensor(tokenized_boards).to(device)
+    boards_tensor = torch.tensor(tokenized_boards).to(model.device)
     policy, value = model(boards_tensor)
     policy = torch.nn.Softmax(dim=-1)(policy)
     value = torch.nn.Softmax(dim=-1)(value)
