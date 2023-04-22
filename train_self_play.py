@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 import chess
 from self_play import self_play, self_play_batched, self_play_async
 from models import ChessTransformer
-from chess_util import SelfPlayDataset
+from chess_util import SelfPlayDataset, tokenize_board
 
 def train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device):
     num_simulations = 1
@@ -53,6 +53,20 @@ def train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, l
 
         num_simulations = min(num_simulations + 3, num_simulations_max)
 
+def pipelining_test(model, iterations, pipeline):
+    boards = [None]*sum(pipeline)
+    policies = [None]*sum(pipeline)
+    values = [None]*sum(pipeline)
+    for i in range(iterations+sum(pipeline)):
+        if i >= pipeline[0] + pipeline[1]:
+            policy = policies[(i-pipeline[1])%sum(pipeline)].to(device="cpu", non_blocking=True)
+            value = values[(i-pipeline[1])%sum(pipeline)].to(device="cpu", non_blocking=True)
+        if i >= pipeline[0] and i < iterations + pipeline[0]:
+            policies[i%sum(pipeline)], values[i%sum(pipeline)] = model(boards[(i-pipeline[0])%sum(pipeline)])
+        if i < iterations:
+            board = torch.tensor(tokenize_board(chess.Board())).unsqueeze(0)
+            boards[i%sum(pipeline)] = board.to(device=model.device, non_blocking=True)
+
 # Hyperparameters
 d_model = 128
 nhead = 8
@@ -76,8 +90,9 @@ print("cuda available: " + str(torch.cuda.is_available()))
 torch.set_printoptions(threshold=65536)
 
 # Initialize the model
-model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device=device, non_blocking=True)
+model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
-train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device)
+pipelining_test(model, 10000, (32, 32))
+#train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device)
 
-torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
+#torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
