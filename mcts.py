@@ -22,6 +22,11 @@ class Node:
             return 0
         return self.value_sum / self.visits
 
+    def deconstruct(self):
+        self.parent = None
+        for item in self.children.items():
+            item[1].deconstruct()
+        self.children.clear()
 
 def mcts(model, root, board, num_simulations, cpuct=1):
     for _ in range(num_simulations):
@@ -32,7 +37,7 @@ def mcts(model, root, board, num_simulations, cpuct=1):
     children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
     return random.choice(children_with_max_visits)[0]
 
-def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1):
+def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, randomize=False):
     for _ in range(num_simulations):
         nodes = []
         for idx in range(batch_size):
@@ -41,10 +46,21 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1):
         for idx in range(batch_size):
             backpropagate(nodes[idx], values[idx], boards[idx])
     moves = []
-    for idx in range(batch_size):
-        max_visits = max(roots[idx].children.items(), key=lambda item: item[1].visits)[1].visits
-        children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, roots[idx].children.items()))
-        moves.append(random.choice(children_with_max_visits)[0])
+    if randomize:
+        for idx in range(batch_size):
+            total_visits = sum(map(lambda item: item[1].visits if item[1].visits > 0 else 1, roots[idx].children.items()))
+            choice = random.randint(0, total_visits-1)
+            for item in roots[idx].children.items():
+                visits = item[1].visits if item[1].visits > 0 else 1
+                if choice < visits:
+                    moves.append(item[0])
+                    break
+                choice -= visits
+    else:
+        for idx in range(batch_size):
+            max_visits = max(roots[idx].children.items(), key=lambda item: item[1].visits)[1].visits
+            children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, roots[idx].children.items()))
+            moves.append(random.choice(children_with_max_visits)[0])
     return moves
 
 def mcts_async(model, roots, boards, num_simulations, num_instances, cpuct=1):
@@ -102,8 +118,12 @@ def expand_and_evaluate(node, board, model):
     policy = policy[0].cpu().detach().numpy()
     value = value[0].cpu().detach().numpy()
 
+    prior_sum = sum(map(lambda move: policy[move_to_index(board, move)], legal_moves))
+    if prior_sum == 0:
+        prior_sum = 1
+
     for move in legal_moves:
-        node.children[move] = Node(parent=node, prior=policy[move_to_index(board, move)])
+        node.children[move] = Node(parent=node, prior=policy[move_to_index(board, move)]/prior_sum)
 
     return value[2] - value[0]
 

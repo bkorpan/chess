@@ -4,16 +4,19 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import chess
-from self_play import self_play, self_play_batched, self_play_async
+from self_play import self_play, self_play_batched, self_play_async, self_play_threaded
 from models import ChessTransformer
 from chess_util import SelfPlayDataset, tokenize_board
 import concurrent.futures
+import gc
+import sys
 
-def train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device):
+def train_self_play(model, num_rounds, num_games, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size):
     num_simulations = 1
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
-        data = self_play_async(model, num_games, num_simulations, batch_size, device)
+        data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
+        gc.collect()
         print(f"Num samples: {len(data)}")
         loader = DataLoader(SelfPlayDataset(data), batch_size=batch_size, shuffle=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -69,18 +72,20 @@ def pipelining_test(model, iterations, pipeline):
             boards[i%sum(pipeline)] = board.to(device=model.device, non_blocking=True)
 
 def threading_test(model, iterations, num_threads):
-    input_tensor = torch.tensor(tokenize_board(chess.Board())).unsqueeze(0)
+    input_tensor = torch.tensor(tokenize_board(chess.Board())).repeat(16, 1)
     result_tensors = [[] for _ in range(num_threads)]
     futures = []
 
-    def run_model(input_tensor, thread_idx):
+    def run_model(thread_idx):
         for _ in range(0, iterations):
             policy, value = model(input_tensor.to(device))
-            result_tensors[thread_idx].append((policy.to(device='cpu'), value.to(device='cpu')))
+            policy = policy.cpu().detach()
+            value = value.cpu().detach()
+            result_tensors[thread_idx].append((policy, value))
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         for thread_idx in range(0, num_threads):
-            futures.append(executor.submit(run_model, input_tensor, thread_idx))
+            futures.append(executor.submit(run_model, thread_idx))
 
     concurrent.futures.wait(futures)
     for thread_idx in range(0, num_threads):
@@ -94,13 +99,15 @@ dim_feedforward = 4*d_model
 
 # Self-play parameters
 num_rounds = 100
-num_games = 512
+num_games = 10
+num_threads = 4
 num_simulations_max = 100
+self_play_batch_size = 10
 
 # Training parameters
 epochs = 1
 lr = 5e-4
-batch_size = 256
+batch_size = 100
 
 # Device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -108,11 +115,13 @@ print("cuda available: " + str(torch.cuda.is_available()))
 
 torch.set_printoptions(threshold=65536)
 
+sys.setrecursionlimit(10000)
+
 # Initialize the model
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
-threading_test(model, 100, 10)
+#threading_test(model, 1000, 1)
 #pipelining_test(model, 10000, (32, 32))
-#train_self_play(model, num_rounds, num_games, num_simulations_max, epochs, lr, batch_size, device)
+train_self_play(model, num_rounds, num_games, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size)
 
 #torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
