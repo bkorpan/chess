@@ -6,7 +6,7 @@ class GPTDecoderLayer(nn.TransformerDecoderLayer):
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
 
     def forward(self, tgt):
-        tgt2, attn = self.self_attn(tgt, tgt, tgt)
+        tgt2, _ = self.self_attn(tgt, tgt, tgt)
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
@@ -31,9 +31,7 @@ class ChessTransformer(nn.Module):
         self.num_tokens = num_tokens
         self.device = device
         self.positional_encoding = self.positional_encoding_2d(d_model)
-        self.decoders = []
-        for i in range(num_layers):
-            self.decoders.append(GPTDecoderLayer(d_model, nhead, dim_feedforward).to(device))
+        self.decoders = nn.ModuleList([GPTDecoderLayer(d_model, nhead, dim_feedforward) for _ in range(num_layers)]).to(device)
 
     def positional_encoding_2d(self, num_features, chessboard_size=(8, 8)):
         assert num_features % 4 == 0, "num_features should be divisible by 4."
