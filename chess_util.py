@@ -49,6 +49,7 @@ def tokenize_board(board):
                 if square == board.ep_square:
                     piece_token = 13 if piece.color == board.turn else 16
 
+        assert(piece_token >= 0 and piece_token < 19)
         tokenized_board.append(piece_token)
     return tokenized_board
 
