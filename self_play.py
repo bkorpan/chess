@@ -1,9 +1,8 @@
 import copy
-from mcts import mcts, mcts_batched, mcts_async, Node
+from mcts import mcts, mcts_batched, Node
 import numpy as np
 import chess
 from concurrent import futures
-import objgraph
 
 def self_play(model, num_games, num_simulations, cpuct=1):
     game_data = []
@@ -39,7 +38,7 @@ def self_play(model, num_games, num_simulations, cpuct=1):
 def self_play_threaded(model, num_games, num_simulations, num_threads, batch_size, cpuct=1):
     game_data = []
     tasks = []
-    
+
     with futures.ThreadPoolExecutor() as executor:
         for _ in range(num_threads):
             tasks.append(executor.submit(self_play_batched, model, num_games, num_simulations, batch_size))
@@ -88,7 +87,6 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
                 completed_games += 1
                 if completed_games % 100 == 0:
                     print(f"Completed {completed_games} games")
-                    objgraph.show_most_common_types(limit=10)
 
         updated_in_progress_games = min(num_games - completed_games, batch_size)
         if updated_in_progress_games < in_progress_games:
@@ -123,51 +121,6 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
 
     return game_data
 
-def self_play_async(model, num_games, num_simulations, num_instances, cpuct=1):
-    game_data = []
-    completed_games = 0
-    outstanding_games = num_games - num_instances
-    assert(num_games >= num_instances)
-
-    roots = [Node() for _ in range(num_instances)]
-    nodes = roots.copy()
-    boards = [chess.Board() for _ in range(num_instances)]
-    game_states = [[] for _ in range(num_instances)]
-    game_moves = [[] for _ in range(num_instances)]
-
-    while completed_games < num_games:
-        moves = mcts_async(model, nodes, boards, num_simulations, num_instances, cpuct)
-
-        for idx in range(num_instances):
-            if roots[idx]:
-                game_states[idx].append(copy.deepcopy(boards[idx]))
-                boards[idx].push(moves[idx])
-                nodes[idx] = nodes[idx].children[moves[idx]]
-                nodes[idx].parent = None
-                game_moves[idx].append(moves[idx])
-
-                if boards[idx].is_game_over():
-                    winner_value = compute_winner_value(boards[idx])
-                    move_probabilities = compute_move_probabilities(roots[idx], game_moves[idx])
-                    for state, probs in zip(game_states[idx], move_probabilities):
-                        game_data.append((state, probs, winner_value))
-                        winner_value = -winner_value
-
-                    roots[idx].deconstruct()
-                    if outstanding_games > 0:
-                        roots[idx] = Node()
-                        nodes[idx] = roots[idx]
-                        boards[idx] = chess.Board()
-                        game_states[idx] = []
-                        game_moves[idx] = []
-                        outstanding_games -= 1
-
-                    completed_games += 1
-                    if completed_games % 100 == 0:
-                        print(f"Completed {completed_games} games")
-
-    return game_data
-
 def compute_winner_value(board):
     if board.is_checkmate():
         return -1
@@ -193,8 +146,3 @@ def compute_move_probabilities(root, game_moves):
         node = node.children[game_move]
 
     return move_probabilities
-
-# Usage example:
-# model = ...  # Your PyTorch model that returns policy and value estimations for chess
-# game_data = self_play(model, num_games=10, num_simulations=1000)
-
