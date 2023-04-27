@@ -37,8 +37,8 @@ def mcts(model, root, board, num_simulations, cpuct=1):
     children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
     return random.choice(children_with_max_visits)[0]
 
-def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, randomize=False):
-    for _ in range(num_simulations):
+def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, sample_moves=False):
+    for _ in range(num_simulations+1):
         nodes = []
         for idx in range(batch_size):
             nodes.append(select(roots[idx], boards[idx], cpuct))
@@ -46,12 +46,11 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, ran
         for idx in range(batch_size):
             backpropagate(nodes[idx], values[idx], boards[idx])
     moves = []
-    if randomize:
+    if sample_moves:
         for idx in range(batch_size):
-            total_visits = sum(map(lambda item: item[1].visits if item[1].visits > 0 else 1, roots[idx].children.items()))
-            choice = random.randint(0, total_visits-1)
+            choice = random.randint(0, num_simulations-1)
             for item in roots[idx].children.items():
-                visits = item[1].visits if item[1].visits > 0 else 1
+                visits = item[1].visits
                 if choice < visits:
                     moves.append(item[0])
                     break
@@ -65,8 +64,11 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, ran
 
 def select(node, board, cpuct):
     while node.expanded():
-        move, node = max(node.children.items(), key=lambda item: uct(item[1], cpuct))
-        board.push(move)
+        if node.children.items():
+            move, node = max(node.children.items(), key=lambda item: uct(item[1], cpuct))
+            board.push(move)
+        else:
+            break
     return node
 
 def expand_and_evaluate(node, board, model):
