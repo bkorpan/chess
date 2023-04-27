@@ -12,7 +12,8 @@ import sys
 import math
 
 def train_self_play(model, num_rounds, num_games_min, num_games_max, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size):
-    num_simulations = 1
+    #num_simulations = 1
+    num_simulations = num_simulations_max
     num_games = num_games_max
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
@@ -44,8 +45,8 @@ def train_self_play(model, num_rounds, num_games_min, num_games_max, num_simulat
 
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
-        num_simulations = min(math.floor(num_simulations*1.1)+1, num_simulations_max)
-        num_games = max(math.floor(num_games*0.9), num_games_min)
+        #num_simulations = min(math.floor(num_simulations*1.1)+1, num_simulations_max)
+        #num_games = max(math.floor(num_games*0.9), num_games_min)
 
 # Hyperparameters
 d_model = 128
@@ -55,8 +56,8 @@ dim_feedforward = 4*d_model
 
 # Self-play parameters
 num_rounds = 100
-num_games_max = 100
-num_games_min = 2
+num_games_max = 1
+num_games_min = 1
 num_threads = 4
 num_simulations_max = 1000
 self_play_batch_size = 1

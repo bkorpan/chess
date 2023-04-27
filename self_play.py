@@ -63,6 +63,8 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
         #print(f"In progress games = {in_progress_games}")
         moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, cpuct, randomize=True)
 
+        print(list(map(lambda move: move.uci(), moves)))
+
         for idx in range(in_progress_games):
             game_states[idx].append(copy.deepcopy(boards[idx]))
             boards[idx].push(moves[idx])
@@ -71,11 +73,12 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
             game_moves[idx].append(moves[idx])
 
             if boards[idx].is_game_over():
+                print_winner(boards[idx])
                 winner_value = compute_winner_value(boards[idx])
                 move_probabilities = compute_move_probabilities(roots[idx], game_moves[idx])
-                for state, probs in zip(game_states[idx], move_probabilities):
-                    game_data.append((state, probs, winner_value))
+                for state, probs in zip(game_states[idx], move_probabilities).reverse():
                     winner_value = -winner_value
+                    game_data.append((state, probs, winner_value))
 
                 roots[idx].deconstruct()
                 roots[idx] = Node()
@@ -146,3 +149,12 @@ def compute_move_probabilities(root, game_moves):
         node = node.children[game_move]
 
     return move_probabilities
+
+def print_winner(board):
+    if board.checkmate():
+        if board.turn == chess.WHITE:
+            print("Black wins!")
+        else:
+            print("White wins!")
+    else:
+        print("Draw!")
