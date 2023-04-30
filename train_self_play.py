@@ -11,10 +11,7 @@ import concurrent.futures
 import sys
 import math
 
-def train_self_play(model, num_rounds, num_games_min, num_games_max, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size):
-    #num_simulations = 1
-    num_simulations = num_simulations_max
-    num_games = num_games_max
+def train_self_play(model, num_rounds, num_games, num_simulations, num_threads, self_play_batch_size, epochs, lr, batch_size):
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
         data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
@@ -45,9 +42,6 @@ def train_self_play(model, num_rounds, num_games_min, num_games_max, num_simulat
 
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
-        #num_simulations = min(math.floor(num_simulations*1.1)+1, num_simulations_max)
-        #num_games = max(math.floor(num_games*0.9), num_games_min)
-
 # Hyperparameters
 d_model = 128
 nhead = 8
@@ -56,15 +50,14 @@ dim_feedforward = 4*d_model
 
 # Self-play parameters
 num_rounds = 100
-num_games_max = 1
-num_games_min = 1
+num_games = 8
 num_threads = 4
-num_simulations_max = 100
-self_play_batch_size = 1
+num_simulations = 100
+self_play_batch_size = 8
 
 # Training parameters
 epochs = 1
-lr = 5e-4
+lr = 1e-4
 batch_size = 128
 
 # Device
@@ -78,6 +71,6 @@ sys.setrecursionlimit(10000)
 # Initialize the model
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
-train_self_play(model, num_rounds, num_games_min, num_games_max, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size)
+train_self_play(model, num_rounds, num_games, num_simulations, num_threads, self_play_batch_size, epochs, lr, batch_size)
 
-torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
+torch.save(model.state_dict(), 'chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
