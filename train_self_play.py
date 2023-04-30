@@ -59,7 +59,7 @@ num_rounds = 100
 num_games_max = 1
 num_games_min = 1
 num_threads = 4
-num_simulations_max = 1000
+num_simulations_max = 100
 self_play_batch_size = 1
 
 # Training parameters

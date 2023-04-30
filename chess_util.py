@@ -23,8 +23,8 @@ def flip_square(square_idx):
     return (7 - file)*8 + (7-rank)
 
 def move_to_index(board, move):
-    from_square = move.from_square if board.move == chess.WHITE else flip_square(move.from_square)
-    to_square = move.to_square if board.move == chess.WHITE else flip_square(move.to_square)
+    from_square = move.from_square if board.turn == chess.WHITE else flip_square(move.from_square)
+    to_square = move.to_square if board.turn == chess.WHITE else flip_square(move.to_square)
     if board.is_kingside_castling(move):
         return 4096 + 88 + 0
     elif board.is_queenside_castling(move):

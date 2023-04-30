@@ -28,20 +28,20 @@ class Node:
             item[1].deconstruct()
         self.children.clear()
 
-def mcts(model, root, board, num_simulations, cpuct=1):
+def mcts(model, root, board, num_simulations, cpuct=1, exp=1.1):
     for _ in range(num_simulations):
-        node = select(root, board, cpuct)
+        node = select(root, board, cpuct, exp)
         value = expand_and_evaluate(node, board, model)
         backpropagate(node, value, board)
     max_visits = max(root.children.items(), key=lambda item: item[1].visits)[1].visits
     children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
     return random.choice(children_with_max_visits)[0]
 
-def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, sample_moves=False):
+def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, exp=1.1, sample_moves=False):
     for _ in range(num_simulations+1):
         nodes = []
         for idx in range(batch_size):
-            nodes.append(select(roots[idx], boards[idx], cpuct))
+            nodes.append(select(roots[idx], boards[idx], cpuct, exp))
         values = expand_and_evaluate_batched(nodes, boards, batch_size, model)
         for idx in range(batch_size):
             backpropagate(nodes[idx], values[idx], boards[idx])
@@ -62,10 +62,10 @@ def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, sam
             moves.append(random.choice(children_with_max_visits)[0])
     return moves
 
-def select(node, board, cpuct):
+def select(node, board, cpuct, exp):
     while node.expanded():
-        if node.children.items():
-            move, node = max(node.children.items(), key=lambda item: uct(item[1], cpuct))
+        if not board.is_game_over():
+            move, node = max(node.children.items(), key=lambda item: uct(item[1], cpuct, exp))
             board.push(move)
         else:
             break
@@ -73,7 +73,7 @@ def select(node, board, cpuct):
 
 def expand_and_evaluate(node, board, model):
     legal_moves = list(board.legal_moves)
-    if not legal_moves:
+    if board.is_game_over():
         return -1 if board.is_checkmate() else 0
 
     board_tensor = torch.tensor(tokenize_board(board)).unsqueeze(0).to(model.device)
@@ -105,12 +105,11 @@ def expand_and_evaluate_batched(nodes, boards, batch_size, model):
 
     values = []
     for idx in range(batch_size):
-        legal_moves = list(boards[idx].legal_moves)
-        if not legal_moves:
+        if boards[idx].is_game_over():
             values.append(-1 if boards[idx].is_checkmate() else 0)
         else:
             values.append(value[idx, 2] - value[idx, 0])
-            for move in legal_moves:
+            for move in boards[idx].legal_moves:
                 nodes[idx].children[move] = Node(parent=nodes[idx], prior=policy[idx, move_to_index(boards[idx], move)])
 
     return values
@@ -124,7 +123,7 @@ def backpropagate(node, value, board):
         if node is not None:
             board.pop()
 
-def uct(node, cpuct):
-    u = node.prior * np.sqrt(node.parent.visits) / (1 + node.visits)
+def uct(node, cpuct, exp):
+    u = node.prior / (1 + node.visits)**exp * np.sqrt(node.parent.visits)
     q = node.value()
     return q + cpuct * u
