@@ -37,29 +37,39 @@ def mcts(model, root, board, num_simulations, cpuct=1, exp=1.1):
     children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, root.children.items()))
     return random.choice(children_with_max_visits)[0]
 
-def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, exp=1.1, sample_moves=False):
+def mcts_batched(model, roots, boards, num_simulations, batch_size, cpuct=1, exp=1.1, sample_moves=False, pad_batches=False):
     for _ in range(num_simulations+1):
         nodes = []
         for idx in range(batch_size):
-            nodes.append(select(roots[idx], boards[idx], cpuct, exp))
-        values = expand_and_evaluate_batched(nodes, boards, batch_size, model)
+            if roots[idx]:
+                nodes.append(select(roots[idx], boards[idx], cpuct, exp))
+            else:
+                nodes.append(None)
+        values = expand_and_evaluate_batched(nodes, boards, batch_size, model, pad_batches)
         for idx in range(batch_size):
-            backpropagate(nodes[idx], values[idx], boards[idx])
+            if roots[idx]:
+                backpropagate(nodes[idx], values[idx], boards[idx])
     moves = []
     if sample_moves:
         for idx in range(batch_size):
-            choice = random.randint(0, num_simulations-1)
-            for item in roots[idx].children.items():
-                visits = item[1].visits
-                if choice < visits:
-                    moves.append(item[0])
-                    break
-                choice -= visits
+            if roots[idx]:
+                choice = random.randint(0, num_simulations-1)
+                for item in roots[idx].children.items():
+                    visits = item[1].visits
+                    if choice < visits:
+                        moves.append(item[0])
+                        break
+                    choice -= visits
+            else:
+                moves.append(None)
     else:
         for idx in range(batch_size):
-            max_visits = max(roots[idx].children.items(), key=lambda item: item[1].visits)[1].visits
-            children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, roots[idx].children.items()))
-            moves.append(random.choice(children_with_max_visits)[0])
+            if roots[idx]:
+                max_visits = max(roots[idx].children.items(), key=lambda item: item[1].visits)[1].visits
+                children_with_max_visits = list(filter(lambda item: item[1].visits == max_visits, roots[idx].children.items()))
+                moves.append(random.choice(children_with_max_visits)[0])
+            else:
+                moves.append(None)
     return moves
 
 def select(node, board, cpuct, exp):
@@ -92,10 +102,13 @@ def expand_and_evaluate(node, board, model):
 
     return value[2] - value[0]
 
-def expand_and_evaluate_batched(nodes, boards, batch_size, model):
+def expand_and_evaluate_batched(nodes, boards, batch_size, model, pad_batch):
     tokenized_boards = []
     for idx in range(batch_size):
-        tokenized_boards.append(tokenize_board(boards[idx]))
+        if nodes[idx]:
+            tokenized_boards.append(tokenize_board(boards[idx]))
+        elif pad_batch:
+            tokenized_boards.append([0]*64)
     boards_tensor = torch.tensor(tokenized_boards).to(model.device)
     policy, value = model(boards_tensor)
     policy = torch.nn.Softmax(dim=-1)(policy)
@@ -104,13 +117,20 @@ def expand_and_evaluate_batched(nodes, boards, batch_size, model):
     value = value.cpu().detach().numpy()
 
     values = []
+    output_idx = 0
     for idx in range(batch_size):
-        if boards[idx].is_game_over():
-            values.append(-1 if boards[idx].is_checkmate() else 0)
+        if nodes[idx]:
+            if boards[idx].is_game_over():
+                values.append(-1 if boards[idx].is_checkmate() else 0)
+            else:
+                values.append(value[output_idx, 2] - value[output_idx, 0])
+                for move in boards[idx].legal_moves:
+                    nodes[idx].children[move] = Node(parent=nodes[idx], prior=policy[output_idx, move_to_index(boards[idx], move)])
+            output_idx += 1
         else:
-            values.append(value[idx, 2] - value[idx, 0])
-            for move in boards[idx].legal_moves:
-                nodes[idx].children[move] = Node(parent=nodes[idx], prior=policy[idx, move_to_index(boards[idx], move)])
+            values.append(0)
+            if pad_batch:
+                output_idx += 1
 
     return values
 

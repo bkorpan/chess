@@ -52,6 +52,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
     game_data = []
     completed_games = 0
     in_progress_games = min(num_games, batch_size)
+    assert(num_games >= batch_size)
 
     roots = [Node() for _ in range(batch_size)]
     nodes = roots.copy()
@@ -61,67 +62,44 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
 
     while completed_games < num_games:
         #print(f"In progress games = {in_progress_games}")
-        moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, cpuct, sample_moves=True)
+        moves = mcts_batched(model, nodes, boards, num_simulations, in_progress_games, cpuct, sample_moves=True, pad_batches=True)
 
-        print(list(map(lambda move: move.uci(), moves)))
+        print(list(map(lambda move: move.uci() if move else "None", moves)))
 
-        for idx in range(in_progress_games):
-            game_states[idx].append(copy.deepcopy(boards[idx]))
-            boards[idx].push(moves[idx])
-            nodes[idx] = nodes[idx].children[moves[idx]]
-            nodes[idx].parent = None
-            game_moves[idx].append(moves[idx])
+        for idx in range(batch_size):
+            if roots[idx]:
+                game_states[idx].append(copy.deepcopy(boards[idx]))
+                boards[idx].push(moves[idx])
+                nodes[idx] = nodes[idx].children[moves[idx]]
+                nodes[idx].parent = None
+                game_moves[idx].append(moves[idx])
 
-            if boards[idx].is_game_over():
-                print_winner(boards[idx])
-                winner_value = compute_winner_value(boards[idx])
-                move_probabilities = compute_move_probabilities(roots[idx], game_moves[idx])
-                for state, probs in reversed(list(zip(game_states[idx], move_probabilities))):
-                    winner_value = -winner_value
-                    game_data.append((state, probs, winner_value))
+                if boards[idx].is_game_over():
+                    print_winner(boards[idx])
+                    winner_value = compute_winner_value(boards[idx])
+                    move_probabilities = compute_move_probabilities(roots[idx], game_moves[idx])
+                    for state, probs in reversed(list(zip(game_states[idx], move_probabilities))):
+                        winner_value = -winner_value
+                        game_data.append((state, probs, winner_value))
 
-                roots[idx].deconstruct()
-                roots[idx] = Node()
-                nodes[idx] = roots[idx]
-                boards[idx] = chess.Board()
-                game_states[idx] = []
-                game_moves[idx] = []
+                    roots[idx].deconstruct()
+                    completed_games += 1
+                    
+                    if num_games - completed_games >= batch_size:
+                        roots[idx] = Node()
+                        nodes[idx] = roots[idx]
+                        boards[idx] = chess.Board()
+                        game_states[idx] = []
+                        game_moves[idx] = []
+                    else:
+                        roots[idx] = None
+                        nodes[idx] = None
+                        boards[idx] = None
+                        game_states[idx] = None
+                        game_moves[idx] = None
 
-                completed_games += 1
-                if completed_games % 100 == 0:
-                    print(f"Completed {completed_games} games")
-
-        updated_in_progress_games = min(num_games - completed_games, batch_size)
-        if updated_in_progress_games < in_progress_games:
-            roots_tmp = []
-            nodes_tmp = []
-            boards_tmp = []
-            game_states_tmp = []
-            game_moves_tmp = []
-
-            for idx in range(in_progress_games):
-                if len(game_states[idx]) > 0:
-                    roots_tmp.append(roots[idx])
-                    nodes_tmp.append(nodes[idx])
-                    boards_tmp.append(boards[idx])
-                    game_states_tmp.append(game_states[idx])
-                    game_moves_tmp.append(game_moves[idx])
-
-            while len(roots_tmp) < updated_in_progress_games:
-                roots_tmp.append(Node())
-                nodes_tmp.append(roots_tmp[-1])
-                boards_tmp.append(chess.Board())
-                game_states_tmp.append([])
-                game_moves_tmp.append([])
-
-            roots = roots_tmp
-            nodes = nodes_tmp
-            boards = boards_tmp
-            game_states = game_states_tmp
-            game_moves = game_moves_tmp
-
-            in_progress_games = updated_in_progress_games
-
+                    if completed_games % 100 == 0:
+                        print(f"Completed {completed_games} games")
     return game_data
 
 def compute_winner_value(board):
