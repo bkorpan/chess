@@ -14,8 +14,11 @@ import math
 def train_self_play(model, num_rounds, num_games, num_simulations, num_threads, self_play_batch_size, epochs, lr, batch_size):
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
-        data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
+        model.eval()
+        with torch.no_grad():
+            data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
         print(f"Num samples: {len(data)}")
+        model.train()
         loader = DataLoader(SelfPlayDataset(data), batch_size=batch_size, shuffle=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
