@@ -101,7 +101,7 @@ model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to
 if checkpoint_number > 0:
     checkpoint_path = os.path.join(model_dir, 'chess_transformer_' + str(d_model) + '_' + str(dim_feedforward) + '_' + str(nhead) + '_' + str(num_layers) + '_' + str(checkpoint_number) + '.pth')
     checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint)
 
 train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size)
 
