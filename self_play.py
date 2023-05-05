@@ -84,7 +84,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
 
                     roots[idx].deconstruct()
                     completed_games += 1
-                    
+
                     if num_games - completed_games >= batch_size:
                         roots[idx] = Node()
                         nodes[idx] = roots[idx]
