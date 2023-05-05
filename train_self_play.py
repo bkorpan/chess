@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 import chess
 from self_play import self_play, self_play_batched, self_play_threaded
 from models import ChessTransformer
@@ -13,10 +14,11 @@ import sys
 import os
 
 def train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size):
+    scaler = GradScaler()
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
         model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), autocast():
             data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
         print(f"Num samples: {len(data)}")
         model.train()
@@ -36,10 +38,12 @@ def train_self_play(model, num_rounds, num_games, num_simulations, self_play_bat
                 outcome = outcome.to(device)
 
                 optimizer.zero_grad()
-                policy, value = model(board)
-                loss = nn.CrossEntropyLoss()(policy, move) + nn.CrossEntropyLoss()(value, outcome + 1)
-                loss.backward()
-                optimizer.step()
+                with autocast():
+                    policy, value = model(board)
+                    loss = nn.CrossEntropyLoss()(policy, move) + nn.CrossEntropyLoss()(value, outcome + 1)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 epoch_loss += loss.item()
                 batch_loss += loss.item()
