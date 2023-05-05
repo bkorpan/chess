@@ -7,11 +7,12 @@ import chess
 from self_play import self_play, self_play_batched, self_play_threaded
 from models import ChessTransformer
 from chess_util import SelfPlayDataset, tokenize_board
-import concurrent.futures
-import sys
 import math
+import argparse
+import sys
+import os
 
-def train_self_play(model, num_rounds, num_games, num_simulations, num_threads, self_play_batch_size, epochs, lr, batch_size):
+def train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size):
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
         model.eval()
@@ -45,23 +46,45 @@ def train_self_play(model, num_rounds, num_games, num_simulations, num_threads, 
 
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--model-dir', type=str, default="", help='Path to the directory where the model checkpoints will be saved')
+parser.add_argument('--checkpoint', type=int, default=0, help='Checkpoint to load')
+
+parser.add_argument('--dmodel', type=int, default=128, help='Hidden dimensionality of decoders')
+parser.add_argument('--dff', type=int, default=512, help='Dimensionality of feedforward networks')
+parser.add_argument('--nheads', type=int, default=8, help='Number of split attention heads per decoder layer')
+parser.add_argument('--nlayers', type=int, default=8, help='Number of decoder layers')
+
+parser.add_argument('--nrounds', type=int, default=10, help='Number of rounds of self play')
+parser.add_argument('--ngames', type=int, default=512, help='Number of games per round of self play')
+parser.add_argument('--nsims', type=int, default=1600, help='Number of simulations per move during self play')
+parser.add_argument('--self-play-batch-size', type=int, default=256, help='Batch size used for model calls during self play')
+
+parser.add_argument('--epochs', type=int, default=1, help='Epochs of training per round of self play')
+parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+parser.add_argument('--batch-size', type=int, default=256, help='Batch size used during training')
+
+args = parser.parse_args()
+
+model_dir = args.model_dir
+checkpoint_number = args.checkpoint
+
 # Hyperparameters
-d_model = 128
-nhead = 8
-num_layers = 8
-dim_feedforward = 4*d_model
+d_model = args.dmodel
+nhead = args.nheads
+num_layers = args.nlayers
+dim_feedforward = args.dff
 
 # Self-play parameters
-num_rounds = 100
-num_games = 8
-num_threads = 4
-num_simulations = 100
-self_play_batch_size = 8
+num_rounds = args.nrounds
+num_games = args.ngames
+num_simulations = args.nsims
+self_play_batch_size = args.self_play_batch_size
 
 # Training parameters
-epochs = 1
-lr = 1e-4
-batch_size = 128
+epochs = args.epochs
+lr = args.lr
+batch_size = args.batch_size
 
 # Device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -74,6 +97,13 @@ sys.setrecursionlimit(10000)
 # Initialize the model
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
-train_self_play(model, num_rounds, num_games, num_simulations, num_threads, self_play_batch_size, epochs, lr, batch_size)
+# Load checkpoint, if applicable
+if checkpoint_number > 0:
+    checkpoint_path = os.path.join(model_dir, 'chess_transformer_' + str(d_model) + '_' + str(dim_feedforward) + '_' + str(nhead) + '_' + str(num_layers) + '_' + str(checkpoint_number) + '.pth')
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
 
-torch.save(model.state_dict(), 'chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
+train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size)
+
+checkpoint_path = os.path.join(model_dir, 'chess_transformer_' + str(d_model) + '_' + str(dim_feedforward) + '_' + str(nhead) + '_' + str(num_layers) + '_' + str(checkpoint_number+1) + '.pth')
+torch.save(model.state_dict(), checkpoint_path)
