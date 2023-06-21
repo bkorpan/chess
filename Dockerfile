@@ -1,4 +1,4 @@
-FROM gcr.io/deeplearning-platform-release/pytorch-gpu.1-9
+FROM gcr.io/deeplearning-platform-release/pytorch-gpu
 WORKDIR /root
 RUN pip install --no-cache-dir chess numpy
 COPY . .
