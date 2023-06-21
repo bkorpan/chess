@@ -51,7 +51,7 @@ def train_self_play(model, num_rounds, num_games, num_simulations, self_play_bat
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model-dir', type=str, default="", help='Path to the directory where the model checkpoints will be saved')
+parser.add_argument('--job-dir', type=str, default="", help='Path to the directory where the model checkpoints will be saved')
 parser.add_argument('--checkpoint', type=int, default=0, help='Checkpoint to load')
 
 parser.add_argument('--dmodel', type=int, default=128, help='Hidden dimensionality of decoders')
@@ -70,7 +70,7 @@ parser.add_argument('--batch-size', type=int, default=256, help='Batch size used
 
 args = parser.parse_args()
 
-model_dir = args.model_dir
+model_dir = args.job_dir
 checkpoint_number = args.checkpoint
 
 # Hyperparameters
