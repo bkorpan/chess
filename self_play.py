@@ -1,8 +1,11 @@
 import copy
-from mcts import mcts, mcts_batched, Node
+import gc
+from concurrent import futures
+
 import numpy as np
 import chess
-from concurrent import futures
+
+from mcts import mcts, mcts_batched, Node
 
 def self_play(model, num_games, num_simulations, cpuct=1):
     game_data = []
@@ -100,6 +103,7 @@ def self_play_batched(model, num_games, num_simulations, batch_size, cpuct=1):
 
                     if completed_games % 100 == 0:
                         print(f"Completed {completed_games} games")
+        gc.collect()
     return game_data
 
 def compute_winner_value(board):
