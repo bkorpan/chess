@@ -1,10 +1,12 @@
+import random
+import time
+from collections import defaultdict
+
 import torch
 import chess
-import random
 import numpy as np
-from collections import defaultdict
+
 from chess_util import tokenize_board, move_to_index
-import time
 
 class Node:
     def __init__(self, parent=None, prior=0):

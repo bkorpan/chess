@@ -1,17 +1,20 @@
+import math
+import argparse
+import sys
+import os
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
+
 import chess
+
 from self_play import self_play, self_play_batched, self_play_threaded
 from models import ChessTransformer
 from chess_util import SelfPlayDataset, tokenize_board
-import math
-import argparse
-import sys
-import os
 
 def train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size):
     scaler = GradScaler()
