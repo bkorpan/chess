@@ -1,23 +1,30 @@
+import math
+import argparse
+import sys
+import os
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
+
 import chess
-from self_play import self_play, self_play_batched, self_play_async, self_play_threaded
+
+from self_play import self_play, self_play_batched, self_play_threaded
 from models import ChessTransformer
 from chess_util import SelfPlayDataset, tokenize_board
-import concurrent.futures
-import gc
-import sys
 
-def train_self_play(model, num_rounds, num_games, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size):
-    num_simulations = 1
+def train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size):
+    scaler = GradScaler()
     for curr_round in range(num_rounds):
         print(f"Starting round {curr_round+1}")
-        data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
-        gc.collect()
+        model.eval()
+        with torch.no_grad(), autocast():
+            data = self_play_batched(model, num_games, num_simulations, self_play_batch_size)
         print(f"Num samples: {len(data)}")
+        model.train()
         loader = DataLoader(SelfPlayDataset(data), batch_size=batch_size, shuffle=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -28,86 +35,63 @@ def train_self_play(model, num_rounds, num_games, num_simulations_max, num_threa
                 if i % 100 == 0 and i != 0:
                     print(f"Epoch {epoch + 1}/{epochs}, Batch {i}/{len(loader)}: Loss = {batch_loss / 100}")
                     batch_loss = 0
-                    #scheduler.step()
 
                 board = board.to(device)
                 move = move.to(device)
                 outcome = outcome.to(device)
 
                 optimizer.zero_grad()
-                policy, value = model(board)
-                loss = nn.CrossEntropyLoss()(policy, move) + nn.CrossEntropyLoss()(value, outcome + 1)
-                loss.backward()
-                optimizer.step()
+                with autocast():
+                    policy, value = model(board)
+                    loss = nn.CrossEntropyLoss()(policy, move) + nn.CrossEntropyLoss()(value, outcome + 1)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 epoch_loss += loss.item()
                 batch_loss += loss.item()
 
-                #if epoch == epochs-1:
-                    #for j in range(batch_size):
-                    #    np = 0
-                    #    print(f"Sample {j}:\n")
-                    #    for k in range(20480):
-                    #        if output[j, k] > 0:
-                    #            print(f"P({k} | {j}) = {output[j, k]}\n")
-                    #print(attn.shape)
-                    #print(attn[0])
-
             print(f"Epoch {epoch + 1}/{epochs}: Loss = {epoch_loss / len(loader)}")
 
-        num_simulations = min(num_simulations + 3, num_simulations_max)
+parser = argparse.ArgumentParser()
+parser.add_argument('--job-dir', type=str, default="", help='Path to the directory where the model checkpoints will be saved')
+parser.add_argument('--checkpoint', type=int, default=0, help='Checkpoint to load')
 
-def pipelining_test(model, iterations, pipeline):
-    boards = [None]*sum(pipeline)
-    policies = [None]*sum(pipeline)
-    values = [None]*sum(pipeline)
-    for i in range(iterations+sum(pipeline)):
-        if i >= pipeline[0] + pipeline[1]:
-            policy = policies[(i-pipeline[1])%sum(pipeline)].to(device="cpu", non_blocking=True)
-            value = values[(i-pipeline[1])%sum(pipeline)].to(device="cpu", non_blocking=True)
-        if i >= pipeline[0] and i < iterations + pipeline[0]:
-            policies[i%sum(pipeline)], values[i%sum(pipeline)] = model(boards[(i-pipeline[0])%sum(pipeline)])
-        if i < iterations:
-            board = torch.tensor(tokenize_board(chess.Board())).unsqueeze(0)
-            boards[i%sum(pipeline)] = board.to(device=model.device, non_blocking=True)
+parser.add_argument('--dmodel', type=int, default=128, help='Hidden dimensionality of decoders')
+parser.add_argument('--dff', type=int, default=512, help='Dimensionality of feedforward networks')
+parser.add_argument('--nheads', type=int, default=8, help='Number of split attention heads per decoder layer')
+parser.add_argument('--nlayers', type=int, default=8, help='Number of decoder layers')
 
-def threading_test(model, iterations, num_threads):
-    input_tensor = torch.tensor(tokenize_board(chess.Board())).repeat(16, 1)
-    result_tensors = [[] for _ in range(num_threads)]
-    futures = []
+parser.add_argument('--nrounds', type=int, default=10, help='Number of rounds of self play')
+parser.add_argument('--ngames', type=int, default=512, help='Number of games per round of self play')
+parser.add_argument('--nsims', type=int, default=1600, help='Number of simulations per move during self play')
+parser.add_argument('--self-play-batch-size', type=int, default=256, help='Batch size used for model calls during self play')
 
-    def run_model(thread_idx):
-        for _ in range(0, iterations):
-            policy, value = model(input_tensor.to(device))
-            policy = policy.cpu().detach()
-            value = value.cpu().detach()
-            result_tensors[thread_idx].append((policy, value))
+parser.add_argument('--epochs', type=int, default=1, help='Epochs of training per round of self play')
+parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+parser.add_argument('--batch-size', type=int, default=256, help='Batch size used during training')
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        for thread_idx in range(0, num_threads):
-            futures.append(executor.submit(run_model, thread_idx))
+args = parser.parse_args()
 
-    concurrent.futures.wait(futures)
-    for thread_idx in range(0, num_threads):
-        print(futures[thread_idx].exception())
+model_dir = args.job_dir
+checkpoint_number = args.checkpoint
 
 # Hyperparameters
-d_model = 128
-nhead = 8
-num_layers = 8
-dim_feedforward = 4*d_model
+d_model = args.dmodel
+nhead = args.nheads
+num_layers = args.nlayers
+dim_feedforward = args.dff
 
 # Self-play parameters
-num_rounds = 100
-num_games = 10
-num_threads = 4
-num_simulations_max = 100
-self_play_batch_size = 10
+num_rounds = args.nrounds
+num_games = args.ngames
+num_simulations = args.nsims
+self_play_batch_size = args.self_play_batch_size
 
 # Training parameters
-epochs = 1
-lr = 5e-4
-batch_size = 100
+epochs = args.epochs
+lr = args.lr
+batch_size = args.batch_size
 
 # Device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -120,8 +104,13 @@ sys.setrecursionlimit(10000)
 # Initialize the model
 model = ChessTransformer(device, d_model, nhead, num_layers, dim_feedforward).to(device)
 
-#threading_test(model, 1000, 1)
-#pipelining_test(model, 10000, (32, 32))
-train_self_play(model, num_rounds, num_games, num_simulations_max, num_threads, self_play_batch_size, epochs, lr, batch_size)
+# Load checkpoint, if applicable
+if checkpoint_number > 0:
+    checkpoint_path = os.path.join(model_dir, 'chess_transformer_' + str(d_model) + '_' + str(dim_feedforward) + '_' + str(nhead) + '_' + str(num_layers) + '_' + str(checkpoint_number) + '.pth')
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint)
 
-#torch.save(model.state_dict(), 'self_play_chess_transformer_' + str(d_model) + '_' + str(nhead) + '_' + str(num_layers) + '.pth')
+train_self_play(model, num_rounds, num_games, num_simulations, self_play_batch_size, epochs, lr, batch_size)
+
+checkpoint_path = os.path.join(model_dir, 'chess_transformer_' + str(d_model) + '_' + str(dim_feedforward) + '_' + str(nhead) + '_' + str(num_layers) + '_' + str(checkpoint_number+1) + '.pth')
+torch.save(model.state_dict(), checkpoint_path)
