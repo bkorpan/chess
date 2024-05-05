@@ -22,6 +22,7 @@ from typing import NamedTuple
 import haiku as hk
 import jax
 import jax.numpy as jnp
+import jmp
 import mctx
 import optax
 import pgx
@@ -260,6 +261,10 @@ def evaluate(rng_key, my_model):
 
 if __name__ == "__main__":
     wandb.init(project="pgx-az", config=config.model_dump())
+
+    # Configure mixed precision
+    hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
     # Initialize model and opt_state
     dummy_state = jax.vmap(env.init)(jax.random.split(jax.random.PRNGKey(0), 2))
