@@ -26,7 +26,6 @@ import jmp
 import mctx
 import optax
 import pgx
-import wandb
 from omegaconf import OmegaConf
 from pgx.experimental import auto_reset
 from pydantic import BaseModel
@@ -260,8 +259,6 @@ def evaluate(rng_key, my_model):
 
 
 if __name__ == "__main__":
-    wandb.init(project="pgx-az", config=config.model_dump())
-
     # Configure mixed precision
     hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
     hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
@@ -320,7 +317,6 @@ if __name__ == "__main__":
                 pickle.dump(dic, f)
 
         print(log)
-        wandb.log(log)
 
         if iteration >= config.max_num_iters:
             break
