@@ -37,7 +37,7 @@ num_devices = len(devices)
 
 
 class Config(BaseModel):
-    env_id: pgx.EnvId = "chess"
+    env_id: pgx.EnvId = "go_9x9"
     seed: int = 0
     max_num_iters: int = 400
     # network params
@@ -45,14 +45,15 @@ class Config(BaseModel):
     num_layers: int = 6
     resnet_v2: bool = True
     # selfplay params
-    selfplay_batch_size: int = 1024
-    num_simulations: int = 32
+    selfplay_batch_size: int = 4096
+    num_simulations: int = 4
     max_num_steps: int = 256
     # training params
     training_batch_size: int = 1024
     learning_rate: float = 0.001
     # eval params
     eval_interval: int = 5
+    checkpoint_interval: int = 1
 
     class Config:
         extra = "forbid"
@@ -257,33 +258,57 @@ def evaluate(rng_key, my_model):
     )
     return R
 
+def save_checkpoint(state, path):
+    with open(path, 'wb') as f:
+        pickle.dump(state, f)
+
+def load_checkpoint(path):
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    return None
 
 if __name__ == "__main__":
     # Configure mixed precision
     hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
     hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
-    # Initialize model and opt_state
-    dummy_state = jax.vmap(env.init)(jax.random.split(jax.random.PRNGKey(0), 2))
-    dummy_input = dummy_state.observation
-    model = forward.init(jax.random.PRNGKey(0), dummy_input)  # (params, state)
-    opt_state = optimizer.init(params=model[0])
+    # Prepare checkpoint dir
+    checkpoint_path = "checkpoint.pkl"
+
+    # Load existing state if available
+    state = load_checkpoint(checkpoint_path)
+    if state is None:
+        # Initialize model and opt_state
+        dummy_state = jax.vmap(env.init)(jax.random.split(jax.random.PRNGKey(0), 2))
+        dummy_input = dummy_state.observation
+        model = forward.init(jax.random.PRNGKey(0), dummy_input)  # (params, state)
+        opt_state = optimizer.init(params=model[0])
+
+        rng_key = jax.random.PRNGKey(config.seed)
+
+        state = {
+            "rng_key": rng_key,
+            "model": model,
+            "opt_state": opt_state,
+            'iteration': 0,
+            'hours': 0,
+            'frames': 0
+        }
+
+    rng_key = state['rng_key']
+    model = state['model']
+    opt_state = state['opt_state']
+
     # replicates to all devices
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)
 
-    # Prepare checkpoint dir
-    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-    now = now.strftime("%Y%m%d%H%M%S")
-    ckpt_dir = os.path.join("checkpoints", f"{config.env_id}_{now}")
-    os.makedirs(ckpt_dir, exist_ok=True)
-
     # Initialize logging dict
-    iteration: int = 0
-    hours: float = 0.0
-    frames: int = 0
+    iteration = state['iteration']
+    hours = state['hours']
+    frames = state['frames']
     log = {"iteration": iteration, "hours": hours, "frames": frames}
 
-    rng_key = jax.random.PRNGKey(config.seed)
     while True:
         if iteration % config.eval_interval == 0:
             # Evaluation
@@ -299,22 +324,18 @@ if __name__ == "__main__":
                 }
             )
 
+        if iteration % config.checkpoint_interval == 0:
             # Store checkpoints
             model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
-            with open(os.path.join(ckpt_dir, f"{iteration:06d}.ckpt"), "wb") as f:
-                dic = {
-                    "config": config,
-                    "rng_key": rng_key,
-                    "model": jax.device_get(model_0),
-                    "opt_state": jax.device_get(opt_state_0),
-                    "iteration": iteration,
-                    "frames": frames,
-                    "hours": hours,
-                    "pgx.__version__": pgx.__version__,
-                    "env_id": env.id,
-                    "env_version": env.version,
-                }
-                pickle.dump(dic, f)
+            state = {
+                "rng_key": rng_key,
+                "model": jax.device_get(model_0),
+                "opt_state": jax.device_get(opt_state_0),
+                "iteration": iteration,
+                "frames": frames,
+                "hours": hours,
+            }
+            save_checkpoint(state, checkpoint_path)
 
         print(log)
 
