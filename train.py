@@ -16,6 +16,7 @@ import datetime
 import os
 import pickle
 import time
+import logging
 from functools import partial
 from typing import NamedTuple
 
@@ -309,6 +310,13 @@ if __name__ == "__main__":
     frames = state['frames']
     log = {"iteration": iteration, "hours": hours, "frames": frames}
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s',
+        filename=f'log.txt',
+        filemode='w'
+    )
+
     while True:
         if iteration % config.eval_interval == 0:
             # Evaluation
@@ -338,6 +346,7 @@ if __name__ == "__main__":
             save_checkpoint(state, checkpoint_path)
 
         print(log)
+        logging.info(log)
 
         if iteration >= config.max_num_iters:
             break
