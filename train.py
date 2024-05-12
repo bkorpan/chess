@@ -27,6 +27,8 @@ import jmp
 import mctx
 import optax
 import pgx
+import boto3
+from botocore.exceptions import ClientError
 from omegaconf import OmegaConf
 from pgx.experimental import auto_reset
 from pydantic import BaseModel
@@ -46,8 +48,8 @@ class Config(BaseModel):
     num_layers: int = 6
     resnet_v2: bool = True
     # selfplay params
-    selfplay_batch_size: int = 4096
-    num_simulations: int = 4
+    selfplay_batch_size: int = 1024
+    num_simulations: int = 2
     max_num_steps: int = 256
     # training params
     training_batch_size: int = 1024
@@ -259,26 +261,45 @@ def evaluate(rng_key, my_model):
     )
     return R
 
-def save_checkpoint(state, path):
-    with open(path, 'wb') as f:
-        pickle.dump(state, f)
+def save_checkpoint(state, bucket_name, key):
+    s3 = boto3.resource('s3')
 
-def load_checkpoint(path):
-    if os.path.exists(path):
-        with open(path, 'rb') as f:
-            return pickle.load(f)
-    return None
+    pickled_state = pickle.dumps(state)
+
+    bucket = s3.Bucket(bucket_name)
+    bucket.put_object(Key=key, Body=pickled_state)
+
+def load_checkpoint(bucket_name, key):
+    s3 = boto3.resource('s3')
+
+    try:
+        # Attempt to retrieve the object metadata
+        obj = s3.Object(bucket_name, key)
+        response = obj.get()
+    except ClientError as e:
+        # If a ClientError is raised, the object does not exist or you have no permission
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            return None
+        else:
+            # Handle other possible exceptions (e.g., permission issues, etc.)
+            raise
+
+    pickled_state = response['Body'].read()
+    state = pickle.loads(pickled_state)
+
+    return state
 
 if __name__ == "__main__":
     # Configure mixed precision
     hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
     hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
-    # Prepare checkpoint dir
-    checkpoint_path = "checkpoint.pkl"
+    # s3 bucket for checkpointing
+    bucket_name = "bkorpan-models"
+    checkpoint_key = "checkpoint"
 
     # Load existing state if available
-    state = load_checkpoint(checkpoint_path)
+    state = load_checkpoint(bucket_name, checkpoint_key)
     if state is None:
         # Initialize model and opt_state
         dummy_state = jax.vmap(env.init)(jax.random.split(jax.random.PRNGKey(0), 2))
@@ -343,7 +364,7 @@ if __name__ == "__main__":
                 "frames": frames,
                 "hours": hours,
             }
-            save_checkpoint(state, checkpoint_path)
+            save_checkpoint(state, bucket_name, checkpoint_key)
 
         print(log)
         logging.info(log)
