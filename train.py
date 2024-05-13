@@ -56,7 +56,6 @@ class Config(BaseModel):
     learning_rate: float = 0.001
     # eval params
     eval_interval: int = 5
-    checkpoint_interval: int = 1
 
     class Config:
         extra = "forbid"
@@ -289,6 +288,36 @@ def load_checkpoint(bucket_name, key):
 
     return state
 
+def check_for_interruption():
+    try:
+        # URL for the spot instance interruption notice metadata
+        url = "http://169.254.169.254/latest/meta-data/spot/instance-action"
+        response = requests.get(url, timeout=10)
+
+        if response.status_code == 200:
+            # If there is a termination notice
+            data = response.json()
+            print("Interruption notice detected:")
+            print(f"Action: {data['action']}")
+            print(f"Time: {data['time']}")
+            return True
+        else:
+            # No termination notice
+            return False
+    except requests.exceptions.RequestException as e:
+        print("Failed to fetch interruption notice:", e)
+        return False
+
+def delete_object(bucket_name, key):
+    # Create an S3 client
+    s3 = boto3.client('s3')
+    try:
+        # Delete the object
+        response = s3.delete_object(Bucket=bucket_name, Key=key)
+        return response
+    except Exception as e:
+        print(f"Error occurred: {e}")
+
 if __name__ == "__main__":
     # Configure mixed precision
     hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
@@ -353,8 +382,8 @@ if __name__ == "__main__":
                 }
             )
 
-        if iteration % config.checkpoint_interval == 0:
-            # Store checkpoints
+        if check_for_interruption():
+            # Store checkpoint
             model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
             state = {
                 "rng_key": rng_key,
@@ -365,6 +394,7 @@ if __name__ == "__main__":
                 "hours": hours,
             }
             save_checkpoint(state, bucket_name, checkpoint_key)
+            exit()
 
         print(log)
         logging.info(log)
@@ -414,3 +444,19 @@ if __name__ == "__main__":
                 "frames": frames,
             }
         )
+
+    # Store checkpoint of final state
+    final_checkpoint_key = "model"
+    model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
+    state = {
+        "rng_key": rng_key,
+        "model": jax.device_get(model_0),
+        "opt_state": jax.device_get(opt_state_0),
+        "iteration": iteration,
+        "frames": frames,
+        "hours": hours,
+    }
+    save_checkpoint(state, bucket_name, final_checkpoint_key)
+
+    # Delete old checkpoint
+    delete_object(bucket_name, checkpoint_key)
