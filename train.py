@@ -328,7 +328,6 @@ def delete_object(bucket_name, key):
         print(f"Error occurred: {e}")
 
 def count_params(params):
-    print("Parameter structure:", jax.tree_util.tree_map(lambda x: x.shape, params))
     return sum(jax.tree_util.tree_leaves(jax.tree_map(lambda x: x.size, params)))
 
 if __name__ == "__main__":
@@ -350,6 +349,7 @@ if __name__ == "__main__":
         dummy_state = jax.vmap(env.init)(jax.random.split(jax.random.PRNGKey(0), 2))
         dummy_input = dummy_state.observation
         model = forward.init(jax.random.PRNGKey(0), dummy_input)  # (params, state)
+        #print(hk.experimental.tabulate(forward)(dummy_input))
         opt_state = optimizer.init(params=model[0])
 
         rng_key = jax.random.PRNGKey(config.seed)
@@ -369,7 +369,6 @@ if __name__ == "__main__":
 
     num_params = count_params(model)
     print(f"# parameters = {num_params}")
-    exit()
 
     # replicates to all devices
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)

@@ -46,36 +46,6 @@ class EncoderStack(hk.Module):
     widening_factor: int = 4  # Factor by which the MLP hidden layer widens.
     name: Optional[str] = None  # Optional identifier for the module.
 
-    def _encoder_block(self, h, initializer, is_training):
-        _, _, model_size = h.shape
-
-        # First the attention block.
-        attn_block = hk.MultiHeadAttention(
-            num_heads=self.num_heads,
-            key_size=self.attn_size,
-            model_size=model_size,
-            w_init=initializer,
-        )
-        h_norm = _layer_norm(h)
-        h_attn = attn_block(h_norm, h_norm, h_norm)
-        if is_training:
-            h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
-        h = h + h_attn
-
-        # Then the dense block.
-        dense_block = hk.Sequential([
-            hk.Linear(self.widening_factor * model_size, w_init=initializer),
-            jax.nn.gelu,
-            hk.Linear(model_size, w_init=initializer),
-        ])
-        h_norm = _layer_norm(h)
-        h_dense = dense_block(h_norm)
-        if is_training:
-            h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
-        h = h + h_dense
-
-        return h
-
     def __call__(
             self,
             embeddings: jax.Array,  # [B, T, D]
@@ -83,10 +53,34 @@ class EncoderStack(hk.Module):
     ) -> jax.Array:  # [B, T, D]
 
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
+        _, _, model_size = embeddings.shape
 
         h = embeddings
         for _ in range(self.num_layers):
-            h = self._encoder_block(h, initializer, is_training)
+            # First the attention block.
+            attn_block = hk.MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_size=self.attn_size,
+                model_size=model_size,
+                w_init=initializer,
+            )
+            h_norm = _layer_norm(h)
+            h_attn = attn_block(h_norm, h_norm, h_norm)
+            if is_training:
+                h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
+            h = h + h_attn
+
+            # Then the dense block.
+            dense_block = hk.Sequential([
+                hk.Linear(self.widening_factor * model_size, w_init=initializer),
+                jax.nn.gelu,
+                hk.Linear(model_size, w_init=initializer),
+            ])
+            h_norm = _layer_norm(h)
+            h_dense = dense_block(h_norm)
+            if is_training:
+                h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+            h = h + h_dense
 
         return h
 
