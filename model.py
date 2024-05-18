@@ -96,15 +96,13 @@ class Chessformer(hk.Module):
     model_size: int  # Embedding size.
     #position_vocab_size: int
     num_actions: int
-    name: Optional[str] = None  # Optional identifier for the module.
     num_tokens: int
+    name: Optional[str] = None  # Optional identifier for the module.
 
     def __call__(
             self,
             tokens: jax.Array,  # Batch of sequences of input tokens, shape [B, T].
     ) -> jax.Array:  # Batch of sequences of output token logits, shape [B, T, V].
-        """Forward pass, producing a sequence of logits."""
-        unused_batch_size, seq_len = tokens.shape
 
         # TODO use token embeddings
         # Embed the input tokens and positions.
@@ -117,6 +115,7 @@ class Chessformer(hk.Module):
         #input_embeddings = token_embeddings + positional_embeddings  # [B, T, D]
 
         # Use linear layer to embed inputs for now
+        tokens = tokens.astype(jnp.float32)
         input_embeddor = hk.Linear(self.model_size)
         input_embeddings = input_embeddor(tokens)
 

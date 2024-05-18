@@ -78,12 +78,12 @@ def forward_fn(x, is_eval=False):
         widening_factor = 2
     )
     net = Chessformer(
-        encoder_stack = encoder_stack
+        encoder_stack = encoder_stack,
         model_size = config.num_channels,
         num_actions = env.num_actions,
         num_tokens = 81
     )
-    policy_out, value_out = net(x, is_training=not is_eval, test_local_stats=False)
+    policy_out, value_out = net(x)
     return policy_out, value_out
 
 
@@ -327,8 +327,8 @@ def delete_object(bucket_name, key):
 
 if __name__ == "__main__":
     # Configure mixed precision
-    hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
-    hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    #hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    #hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
     # s3 bucket for checkpointing
     bucket_name = "bkorpan-models"
