@@ -17,6 +17,7 @@ import os
 import pickle
 import time
 import logging
+import requests
 from functools import partial
 from typing import NamedTuple
 
@@ -46,7 +47,6 @@ class Config(BaseModel):
     # network params
     num_channels: int = 128
     num_layers: int = 6
-    resnet_v2: bool = True
     # selfplay params
     selfplay_batch_size: int = 1024
     num_simulations: int = 2
@@ -56,6 +56,8 @@ class Config(BaseModel):
     learning_rate: float = 0.001
     # eval params
     eval_interval: int = 5
+
+    ignore_checkpoint: bool = True
 
     class Config:
         extra = "forbid"
@@ -69,7 +71,7 @@ env = pgx.make(config.env_id)
 baseline = pgx.make_baseline_model(config.env_id + "_v0")
 
 
-def forward_fn(x, is_eval=False):
+def forward_fn(x, is_training=False):
     encoder_stack = EncoderStack(
         num_heads = 8,
         num_layers = config.num_layers,
@@ -83,11 +85,11 @@ def forward_fn(x, is_eval=False):
         num_actions = env.num_actions,
         num_tokens = 81
     )
-    policy_out, value_out = net(x)
+    policy_out, value_out = net(x, is_training)
     return policy_out, value_out
 
 
-forward = hk.without_apply_rng(hk.transform_with_state(forward_fn))
+forward = hk.transform_with_state(forward_fn)
 optimizer = optax.adam(learning_rate=config.learning_rate)
 
 
@@ -100,7 +102,7 @@ def recurrent_fn(model, rng_key: jnp.ndarray, action: jnp.ndarray, state: pgx.St
     current_player = state.current_player
     state = jax.vmap(env.step)(state, action)
 
-    (logits, value), _ = forward.apply(model_params, model_state, state.observation, is_eval=True)
+    (logits, value), _ = forward.apply(model_params, model_state, None, state.observation, is_training=False)
     # mask invalid actions
     logits = logits - jnp.max(logits, axis=-1, keepdims=True)
     logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
@@ -137,7 +139,7 @@ def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
         observation = state.observation
 
         (logits, value), _ = forward.apply(
-            model_params, model_state, state.observation, is_eval=True
+            model_params, model_state, None, state.observation, is_training=False
         )
         root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
 
@@ -209,9 +211,9 @@ def compute_loss_input(data: SelfplayOutput) -> Sample:
     )
 
 
-def loss_fn(model_params, model_state, samples: Sample):
+def loss_fn(model_params, model_state, samples: Sample, rng_key):
     (logits, value), model_state = forward.apply(
-        model_params, model_state, samples.obs, is_eval=False
+        model_params, model_state, rng_key, samples.obs, is_training=True
     )
 
     policy_loss = optax.softmax_cross_entropy(logits, samples.policy_tgt)
@@ -224,10 +226,10 @@ def loss_fn(model_params, model_state, samples: Sample):
 
 
 @partial(jax.pmap, axis_name="i")
-def train(model, opt_state, data: Sample):
+def train(model, opt_state, data: Sample, rng_key):
     model_params, model_state = model
     grads, (model_state, policy_loss, value_loss) = jax.grad(loss_fn, has_aux=True)(
-        model_params, model_state, data
+        model_params, model_state, data, rng_key
     )
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = optimizer.update(grads, opt_state)
@@ -251,7 +253,7 @@ def evaluate(rng_key, my_model):
     def body_fn(val):
         key, state, R = val
         (my_logits, _), _ = forward.apply(
-            my_model_parmas, my_model_state, state.observation, is_eval=True
+            my_model_parmas, my_model_state, None, state.observation, is_training=False
         )
         opp_logits, _ = baseline(state.observation)
         is_my_turn = (state.current_player == my_player).reshape((-1, 1))
@@ -325,6 +327,10 @@ def delete_object(bucket_name, key):
     except Exception as e:
         print(f"Error occurred: {e}")
 
+def count_params(params):
+    print("Parameter structure:", jax.tree_util.tree_map(lambda x: x.shape, params))
+    return sum(jax.tree_util.tree_leaves(jax.tree_map(lambda x: x.size, params)))
+
 if __name__ == "__main__":
     # Configure mixed precision
     #hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
@@ -333,6 +339,9 @@ if __name__ == "__main__":
     # s3 bucket for checkpointing
     bucket_name = "bkorpan-models"
     checkpoint_key = "checkpoint"
+
+    if config.ignore_checkpoint:
+        delete_object(bucket_name, checkpoint_key)
 
     # Load existing state if available
     state = load_checkpoint(bucket_name, checkpoint_key)
@@ -357,6 +366,10 @@ if __name__ == "__main__":
     rng_key = state['rng_key']
     model = state['model']
     opt_state = state['opt_state']
+
+    num_params = count_params(model)
+    print(f"# parameters = {num_params}")
+    exit()
 
     # replicates to all devices
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)
@@ -432,10 +445,12 @@ if __name__ == "__main__":
         )
 
         # Training
+        rng_key, subkey = jax.random.split(rng_key)
+        keys = jax.random.split(subkey, num_devices)
         policy_losses, value_losses = [], []
         for i in range(num_updates):
             minibatch: Sample = jax.tree_map(lambda x: x[i], minibatches)
-            model, opt_state, policy_loss, value_loss = train(model, opt_state, minibatch)
+            model, opt_state, policy_loss, value_loss = train(model, opt_state, minibatch, keys)
             policy_losses.append(policy_loss.mean().item())
             value_losses.append(value_loss.mean().item())
         policy_loss = sum(policy_losses) / len(policy_losses)

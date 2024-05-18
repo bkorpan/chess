@@ -46,7 +46,7 @@ class EncoderStack(hk.Module):
     widening_factor: int = 4  # Factor by which the MLP hidden layer widens.
     name: Optional[str] = None  # Optional identifier for the module.
 
-    def _encoder_block(self, h, initializer):
+    def _encoder_block(self, h, initializer, is_training):
         _, _, model_size = h.shape
 
         # First the attention block.
@@ -58,7 +58,8 @@ class EncoderStack(hk.Module):
         )
         h_norm = _layer_norm(h)
         h_attn = attn_block(h_norm, h_norm, h_norm)
-        h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
+        if is_training:
+            h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
         h = h + h_attn
 
         # Then the dense block.
@@ -69,7 +70,8 @@ class EncoderStack(hk.Module):
         ])
         h_norm = _layer_norm(h)
         h_dense = dense_block(h_norm)
-        h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+        if is_training:
+            h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
         h = h + h_dense
 
         return h
@@ -77,14 +79,14 @@ class EncoderStack(hk.Module):
     def __call__(
             self,
             embeddings: jax.Array,  # [B, T, D]
+            is_training: bool
     ) -> jax.Array:  # [B, T, D]
-        """Transforms input embedding sequences to output embedding sequences."""
 
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
 
         h = embeddings
         for _ in range(self.num_layers):
-            h = self._encoder_block(h, initializer)
+            h = self._encoder_block(h, initializer, is_training)
 
         return h
 
@@ -102,6 +104,7 @@ class Chessformer(hk.Module):
     def __call__(
             self,
             tokens: jax.Array,  # Batch of sequences of input tokens, shape [B, T].
+            is_training: bool
     ) -> jax.Array:  # Batch of sequences of output token logits, shape [B, T, V].
 
         # TODO use token embeddings
@@ -116,18 +119,19 @@ class Chessformer(hk.Module):
 
         token_size = tokens.shape[-1]
         tokens = tokens.astype(jnp.float32)
-        tokens = tokens.reshape(-1, num_tokens, token_size)
+        tokens = tokens.reshape(-1, self.num_tokens, token_size)
 
         # Use linear layer to embed inputs for now
         input_embeddor = hk.Linear(self.model_size)
         input_embeddings = input_embeddor(tokens)
 
         # Run the transformer over the inputs.
-        board_embeddings = self.encoder_stack(input_embeddings)  # [B, T, D]
+        board_embeddings = self.encoder_stack(input_embeddings, is_training)  # [B, T, D]
         board_flattened = board_embeddings.reshape(-1, self.model_size * self.num_tokens)
         move_logits = hk.Linear(1)(board_embeddings).reshape(-1, self.num_actions-1)
         pass_logits = hk.Linear(1)(board_flattened)
-        policy_logits = jnp.concatenate(move_logits, pass_logits, axis=-1)
+        policy_logits = jnp.concatenate((move_logits, pass_logits), axis=-1)
         value = hk.Linear(1)(board_flattened)
+        value = value.reshape(-1)
 
         return policy_logits, value
