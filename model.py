@@ -114,8 +114,11 @@ class Chessformer(hk.Module):
         #    'positional_embeddings', [seq_len, self.model_size], init=embed_init)
         #input_embeddings = token_embeddings + positional_embeddings  # [B, T, D]
 
-        # Use linear layer to embed inputs for now
+        token_size = tokens.shape[-1]
         tokens = tokens.astype(jnp.float32)
+        tokens = tokens.reshape(-1, num_tokens, token_size)
+
+        # Use linear layer to embed inputs for now
         input_embeddor = hk.Linear(self.model_size)
         input_embeddings = input_embeddor(tokens)
 

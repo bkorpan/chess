@@ -42,7 +42,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "go_9x9"
     seed: int = 0
-    max_num_iters: int = 400
+    max_num_iters: int = 1000
     # network params
     num_channels: int = 128
     num_layers: int = 6
