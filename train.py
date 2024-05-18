@@ -33,7 +33,7 @@ from omegaconf import OmegaConf
 from pgx.experimental import auto_reset
 from pydantic import BaseModel
 
-from network import AZNet
+from model import EncoderStack, Chessformer
 
 devices = jax.local_devices()
 num_devices = len(devices)
@@ -70,11 +70,18 @@ baseline = pgx.make_baseline_model(config.env_id + "_v0")
 
 
 def forward_fn(x, is_eval=False):
-    net = AZNet(
-        num_actions=env.num_actions,
-        num_channels=config.num_channels,
-        num_blocks=config.num_layers,
-        resnet_v2=config.resnet_v2,
+    encoder_stack = EncoderStack(
+        num_heads = 8,
+        num_layers = config.num_layers,
+        attn_size = 16,
+        dropout_rate = .1,
+        widening_factor = 2
+    )
+    net = Chessformer(
+        encoder_stack = encoder_stack
+        model_size = config.num_channels,
+        num_actions = env.num_actions,
+        num_tokens = 81
     )
     policy_out, value_out = net(x, is_training=not is_eval, test_local_stats=False)
     return policy_out, value_out

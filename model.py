@@ -27,7 +27,7 @@ from typing import Optional
 
 import haiku as hk
 import jax
-import numpy as np
+import jax.numpy as jnp
 
 
 def _layer_norm(x: jax.Array) -> jax.Array:
@@ -37,8 +37,7 @@ def _layer_norm(x: jax.Array) -> jax.Array:
 
 
 @dataclasses.dataclass
-class Transformer(hk.Module):
-    """A transformer stack."""
+class EncoderStack(hk.Module):
 
     num_heads: int  # Number of attention heads.
     num_layers: int  # Number of transformer (attention + MLP) layers to stack.
@@ -47,78 +46,86 @@ class Transformer(hk.Module):
     widening_factor: int = 4  # Factor by which the MLP hidden layer widens.
     name: Optional[str] = None  # Optional identifier for the module.
 
+    def _encoder_block(self, h, initializer):
+        _, _, model_size = h.shape
+
+        # First the attention block.
+        attn_block = hk.MultiHeadAttention(
+            num_heads=self.num_heads,
+            key_size=self.attn_size,
+            model_size=model_size,
+            w_init=initializer,
+        )
+        h_norm = _layer_norm(h)
+        h_attn = attn_block(h_norm, h_norm, h_norm)
+        h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
+        h = h + h_attn
+
+        # Then the dense block.
+        dense_block = hk.Sequential([
+            hk.Linear(self.widening_factor * model_size, w_init=initializer),
+            jax.nn.gelu,
+            hk.Linear(model_size, w_init=initializer),
+        ])
+        h_norm = _layer_norm(h)
+        h_dense = dense_block(h_norm)
+        h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
+        h = h + h_dense
+
+        return h
+
     def __call__(
             self,
             embeddings: jax.Array,  # [B, T, D]
-            mask: jax.Array,  # [B, T]
     ) -> jax.Array:  # [B, T, D]
         """Transforms input embedding sequences to output embedding sequences."""
 
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
-        _, seq_len, model_size = embeddings.shape
-
-        # Compute causal mask for autoregressive sequence modelling.
-        mask = mask[:, None, None, :]  # [B, H=1, T'=1, T]
-        causal_mask = np.tril(np.ones((1, 1, seq_len, seq_len)))  # [B=1, H=1, T, T]
-        mask = mask * causal_mask  # [B, H=1, T, T]
 
         h = embeddings
         for _ in range(self.num_layers):
-            # First the attention block.
-            attn_block = hk.MultiHeadAttention(
-                num_heads=self.num_heads,
-                key_size=self.attn_size,
-                model_size=model_size,
-                w_init=initializer,
-            )
-            h_norm = _layer_norm(h)
-            h_attn = attn_block(h_norm, h_norm, h_norm, mask=mask)
-            h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
-            h = h + h_attn
+            h = self._encoder_block(h, initializer)
 
-            # Then the dense block.
-            dense_block = hk.Sequential([
-                hk.Linear(self.widening_factor * model_size, w_init=initializer),
-                jax.nn.gelu,
-                hk.Linear(model_size, w_init=initializer),
-            ])
-            h_norm = _layer_norm(h)
-            h_dense = dense_block(h_norm)
-            h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
-            h = h + h_dense
-
-        return _layer_norm(h)
+        return h
 
 
 @dataclasses.dataclass
-class LanguageModel(hk.Module):
-    """An autoregressive transformer-based language model."""
+class Chessformer(hk.Module):
 
-    transformer: Transformer
+    encoder_stack: EncoderStack
     model_size: int  # Embedding size.
-    vocab_size: int  # Size of the vocabulary.
-    pad_token: int  # Identity of the padding token (used for masking inputs).
+    #position_vocab_size: int
+    num_actions: int
     name: Optional[str] = None  # Optional identifier for the module.
+    num_tokens: int
 
     def __call__(
             self,
             tokens: jax.Array,  # Batch of sequences of input tokens, shape [B, T].
     ) -> jax.Array:  # Batch of sequences of output token logits, shape [B, T, V].
         """Forward pass, producing a sequence of logits."""
-        input_mask = (tokens != self.pad_token)
         unused_batch_size, seq_len = tokens.shape
 
+        # TODO use token embeddings
         # Embed the input tokens and positions.
-        embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
-        token_embedding_map = hk.Embed(
-            self.vocab_size, embed_dim=self.model_size, w_init=embed_init)
-        token_embeddings = token_embedding_map(tokens)
-        positional_embeddings = hk.get_parameter(
-            'positional_embeddings', [seq_len, self.model_size], init=embed_init)
-        input_embeddings = token_embeddings + positional_embeddings  # [B, T, D]
+        #embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
+        #token_embedding_map = hk.Embed(
+        #    self.position_vocab_size, embed_dim=self.model_size, w_init=embed_init)
+        #token_embeddings = token_embedding_map(tokens)
+        #positional_embeddings = hk.get_parameter(
+        #    'positional_embeddings', [seq_len, self.model_size], init=embed_init)
+        #input_embeddings = token_embeddings + positional_embeddings  # [B, T, D]
+
+        # Use linear layer to embed inputs for now
+        input_embeddor = hk.Linear(self.model_size)
+        input_embeddings = input_embeddor(tokens)
 
         # Run the transformer over the inputs.
-        embeddings = self.transformer(input_embeddings, input_mask)  # [B, T, D]
+        board_embeddings = self.encoder_stack(input_embeddings)  # [B, T, D]
+        board_flattened = board_embeddings.reshape(-1, self.model_size * self.num_tokens)
+        move_logits = hk.Linear(1)(board_embeddings).reshape(-1, self.num_actions-1)
+        pass_logits = hk.Linear(1)(board_flattened)
+        policy_logits = jnp.concatenate(move_logits, pass_logits, axis=-1)
+        value = hk.Linear(1)(board_flattened)
 
-        # Decode the embeddings (here, we use untied weights).
-        return hk.Linear(self.vocab_size)(embeddings)  # [B, T, V]
+        return policy_logits, value
