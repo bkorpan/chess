@@ -17,6 +17,7 @@ import os
 import pickle
 import time
 import logging
+import requests
 from functools import partial
 from typing import NamedTuple
 
@@ -318,6 +319,9 @@ def delete_object(bucket_name, key):
     except Exception as e:
         print(f"Error occurred: {e}")
 
+def count_params(params):
+    return sum(jax.tree_util.tree_leaves(jax.tree_map(lambda x: x.size, params)))
+
 if __name__ == "__main__":
     # Configure mixed precision
     hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
@@ -350,6 +354,9 @@ if __name__ == "__main__":
     rng_key = state['rng_key']
     model = state['model']
     opt_state = state['opt_state']
+
+    num_params = count_params(model)
+    print(f"# parameters = {num_params}")
 
     # replicates to all devices
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)
