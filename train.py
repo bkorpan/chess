@@ -45,13 +45,17 @@ class Config(BaseModel):
     seed: int = 0
     max_num_iters: int = 1000
     # network params
-    num_channels: int = 128
+    model_size: int = 256
     num_layers: int = 6
+    attn_size: int = 32
+    num_heads: int = 8
+    widening_factor: int = 1.5
     # selfplay params
-    selfplay_batch_size: int = 1024
+    selfplay_batch_size: int = 256
     num_simulations: int = 2
     max_num_steps: int = 256
     # training params
+    dropout_rate: float = 0.1
     training_batch_size: int = 1024
     learning_rate: float = 0.001
     # eval params
@@ -73,15 +77,15 @@ baseline = pgx.make_baseline_model(config.env_id + "_v0")
 
 def forward_fn(x, is_training=False):
     encoder_stack = EncoderStack(
-        num_heads = 8,
+        num_heads = config.num_heads,
         num_layers = config.num_layers,
-        attn_size = 16,
-        dropout_rate = .1,
-        widening_factor = 2
+        attn_size = config.attn_size,
+        dropout_rate = config.dropout_rate,
+        widening_factor = config.widening_factor
     )
     net = Chessformer(
         encoder_stack = encoder_stack,
-        model_size = config.num_channels,
+        model_size = config.model_size,
         num_actions = env.num_actions,
         num_tokens = 81
     )

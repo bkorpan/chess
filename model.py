@@ -72,7 +72,7 @@ class EncoderStack(hk.Module):
 
             # Then the dense block.
             dense_block = hk.Sequential([
-                hk.Linear(self.widening_factor * model_size, w_init=initializer),
+                hk.Linear(int(self.widening_factor * model_size), w_init=initializer),
                 jax.nn.gelu,
                 hk.Linear(model_size, w_init=initializer),
             ])
