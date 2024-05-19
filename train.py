@@ -45,13 +45,13 @@ class Config(BaseModel):
     seed: int = 0
     max_num_iters: int = 1000
     # network params
-    model_size: int = 256
+    model_size: int = 128
     num_layers: int = 6
-    attn_size: int = 32
+    attn_size: int = 16
     num_heads: int = 8
     widening_factor: int = 1.5
     # selfplay params
-    selfplay_batch_size: int = 256
+    selfplay_batch_size: int = 1024
     num_simulations: int = 2
     max_num_steps: int = 256
     # training params
