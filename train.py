@@ -273,6 +273,7 @@ def evaluate(rng_key, my_model):
     )
     return R
 
+
 def save_checkpoint(state, bucket_name, key):
     s3 = boto3.resource('s3')
 
@@ -280,6 +281,7 @@ def save_checkpoint(state, bucket_name, key):
 
     bucket = s3.Bucket(bucket_name)
     bucket.put_object(Key=key, Body=pickled_state)
+
 
 def load_checkpoint(bucket_name, key):
     s3 = boto3.resource('s3')
@@ -301,6 +303,7 @@ def load_checkpoint(bucket_name, key):
 
     return state
 
+
 def check_for_interruption():
     try:
         # URL for the spot instance interruption notice metadata
@@ -321,6 +324,7 @@ def check_for_interruption():
         print("Failed to fetch interruption notice:", e)
         return False
 
+
 def delete_object(bucket_name, key):
     # Create an S3 client
     s3 = boto3.client('s3')
@@ -331,13 +335,47 @@ def delete_object(bucket_name, key):
     except Exception as e:
         print(f"Error occurred: {e}")
 
+
+def terminate_spot_request_and_this_instance():
+    def get_instance_metadata():
+        """Retrieve instance metadata."""
+        metadata_url = 'http://169.254.169.254/latest/meta-data/'
+        instance_id = requests.get(metadata_url + 'instance-id').text
+        region = requests.get(metadata_url + 'placement/availability-zone').text[:-1]
+        return instance_id, region
+
+    def get_spot_instance_request_id(instance_id, region):
+        """Retrieve the Spot Instance Request ID for the given instance."""
+        ec2_client = boto3.client('ec2', region_name=region)
+        response = ec2_client.describe_instances(InstanceIds=[instance_id])
+        spot_instance_request_id = response['Reservations'][0]['Instances'][0]['SpotInstanceRequestId']
+        return spot_instance_request_id
+
+    def cancel_spot_instance_request(spot_instance_request_id, region):
+        """Cancel the Spot Instance Request."""
+        ec2_client = boto3.client('ec2', region_name=region)
+        ec2_client.cancel_spot_instance_requests(SpotInstanceRequestIds=[spot_instance_request_id])
+
+    def terminate_instance(instance_id, region):
+        """Terminate the EC2 instance."""
+        ec2_client = boto3.client('ec2', region_name=region)
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+
+    instance_id, region = get_instance_metadata()
+    spot_instance_request_id = get_spot_instance_request_id(instance_id, region)
+    cancel_spot_instance_request(spot_instance_request_id, region)
+    terminate_instance(instance_id, region)
+    print(f"Spot Instance Request {spot_instance_request_id} canceled and instance {instance_id} terminated.")
+
+
 def count_params(params):
     return sum(jax.tree_util.tree_leaves(jax.tree_map(lambda x: x.size, params)))
 
+
 if __name__ == "__main__":
     # Configure mixed precision
-    #hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
-    #hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
     # s3 bucket for checkpointing
     bucket_name = "bkorpan-models"
@@ -483,5 +521,6 @@ if __name__ == "__main__":
     }
     save_checkpoint(state, bucket_name, final_checkpoint_key)
 
-    # Delete old checkpoint
+    # Delete old checkpoint, terminate spot request and the current instance
     delete_object(bucket_name, checkpoint_key)
+    terminate_spot_request_and_this_instance()
