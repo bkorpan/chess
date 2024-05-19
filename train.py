@@ -61,7 +61,7 @@ class Config(BaseModel):
     # eval params
     eval_interval: int = 5
 
-    ignore_checkpoint: bool = True
+    ignore_checkpoint: bool = False
 
     class Config:
         extra = "forbid"
