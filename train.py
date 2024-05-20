@@ -62,6 +62,7 @@ class Config(BaseModel):
     eval_interval: int = 5
 
     ignore_checkpoint: bool = False
+    mixed_precision: bool = False
 
     class Config:
         extra = "forbid"
@@ -374,8 +375,9 @@ def count_params(params):
 
 if __name__ == "__main__":
     # Configure mixed precision
-    hk.mixed_precision.set_policy(hk.Conv2D, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
-    hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+    if config.mixed_precision:
+        hk.mixed_precision.set_policy(hk.Linear, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
+        hk.mixed_precision.set_policy(hk.MultiHeadAttention, jmp.get_policy("params=float32,compute=bfloat16,output=float32"))
 
     # s3 bucket for checkpointing
     bucket_name = "bkorpan-models"
