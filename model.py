@@ -42,14 +42,12 @@ class EncoderStack(hk.Module):
     num_heads: int  # Number of attention heads.
     num_layers: int  # Number of transformer (attention + MLP) layers to stack.
     attn_size: int  # Size of the attention (key, query, value) vectors.
-    dropout_rate: float  # Probability with which to apply dropout.
     widening_factor: int = 4  # Factor by which the MLP hidden layer widens.
     name: Optional[str] = None  # Optional identifier for the module.
 
     def __call__(
             self,
-            embeddings: jax.Array,  # [B, T, D]
-            is_training: bool
+            embeddings: jax.Array  # [B, T, D]
     ) -> jax.Array:  # [B, T, D]
 
         initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
@@ -66,8 +64,6 @@ class EncoderStack(hk.Module):
             )
             h_norm = _layer_norm(h)
             h_attn = attn_block(h_norm, h_norm, h_norm)
-            if is_training:
-                h_attn = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_attn)
             h = h + h_attn
 
             # Then the dense block.
@@ -78,11 +74,9 @@ class EncoderStack(hk.Module):
             ])
             h_norm = _layer_norm(h)
             h_dense = dense_block(h_norm)
-            if is_training:
-                h_dense = hk.dropout(hk.next_rng_key(), self.dropout_rate, h_dense)
             h = h + h_dense
 
-        return h
+        return _layer_norm(h)
 
 
 @dataclasses.dataclass
@@ -97,8 +91,7 @@ class Chessformer(hk.Module):
 
     def __call__(
             self,
-            tokens: jax.Array,  # Batch of sequences of input tokens, shape [B, T].
-            is_training: bool
+            tokens: jax.Array  # Batch of sequences of input tokens, shape [B, T].
     ) -> jax.Array:  # Batch of sequences of output token logits, shape [B, T, V].
 
         # TODO use token embeddings
@@ -120,7 +113,7 @@ class Chessformer(hk.Module):
         input_embeddings = input_embeddor(tokens)
 
         # Run the transformer over the inputs.
-        board_embeddings = self.encoder_stack(input_embeddings, is_training)  # [B, T, D]
+        board_embeddings = self.encoder_stack(input_embeddings)  # [B, T, D]
         board_flattened = board_embeddings.reshape(-1, self.model_size * self.num_tokens)
         move_logits = hk.Linear(1)(board_embeddings).reshape(-1, self.num_actions-1)
         pass_logits = hk.Linear(1)(board_flattened)

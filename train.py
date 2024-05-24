@@ -52,10 +52,9 @@ class Config(BaseModel):
     widening_factor: int = 1.5
     # selfplay params
     selfplay_batch_size: int = 128
-    num_simulations: int = 3
+    num_simulations: int = 2
     max_num_steps: int = 256
     # training params
-    dropout_rate: float = 0.1
     training_batch_size: int = 1024
     learning_rate: float = 0.001
     # eval params
@@ -76,12 +75,11 @@ env = pgx.make(config.env_id)
 baseline = pgx.make_baseline_model(config.env_id + "_v0")
 
 
-def forward_fn(x, is_training=False):
+def forward_fn(x):
     encoder_stack = EncoderStack(
         num_heads = config.num_heads,
         num_layers = config.num_layers,
         attn_size = config.attn_size,
-        dropout_rate = config.dropout_rate,
         widening_factor = config.widening_factor
     )
     net = Chessformer(
@@ -90,7 +88,7 @@ def forward_fn(x, is_training=False):
         num_actions = env.num_actions,
         num_tokens = 81
     )
-    policy_out, value_out = net(x, is_training)
+    policy_out, value_out = net(x)
     return policy_out, value_out
 
 
@@ -107,7 +105,7 @@ def recurrent_fn(model, rng_key: jnp.ndarray, action: jnp.ndarray, state: pgx.St
     current_player = state.current_player
     state = jax.vmap(env.step)(state, action)
 
-    (logits, value), _ = forward.apply(model_params, model_state, None, state.observation, is_training=False)
+    (logits, value), _ = forward.apply(model_params, model_state, None, state.observation)
     # mask invalid actions
     logits = logits - jnp.max(logits, axis=-1, keepdims=True)
     logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
@@ -144,7 +142,7 @@ def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
         observation = state.observation
 
         (logits, value), _ = forward.apply(
-            model_params, model_state, None, state.observation, is_training=False
+            model_params, model_state, None, state.observation
         )
         root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
 
@@ -218,7 +216,7 @@ def compute_loss_input(data: SelfplayOutput) -> Sample:
 
 def loss_fn(model_params, model_state, samples: Sample, rng_key):
     (logits, value), model_state = forward.apply(
-        model_params, model_state, rng_key, samples.obs, is_training=True
+        model_params, model_state, rng_key, samples.obs
     )
 
     policy_loss = optax.softmax_cross_entropy(logits, samples.policy_tgt)
@@ -258,7 +256,7 @@ def evaluate(rng_key, my_model):
     def body_fn(val):
         key, state, R = val
         (my_logits, _), _ = forward.apply(
-            my_model_parmas, my_model_state, None, state.observation, is_training=False
+            my_model_parmas, my_model_state, None, state.observation
         )
         opp_logits, _ = baseline(state.observation)
         is_my_turn = (state.current_player == my_player).reshape((-1, 1))
