@@ -112,6 +112,11 @@ class Chessformer(hk.Module):
         input_embeddor = hk.Linear(self.model_size)
         input_embeddings = input_embeddor(tokens)
 
+        embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
+        positional_embeddings = hk.get_parameter(
+            'positional_embeddings', [self.num_tokens, self.model_size], init=embed_init)
+        input_embeddings = input_embeddings + positional_embeddings
+
         # Run the transformer over the inputs.
         board_embeddings = self.encoder_stack(input_embeddings)  # [B, T, D]
         board_flattened = board_embeddings.reshape(-1, self.model_size * self.num_tokens)

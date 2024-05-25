@@ -43,7 +43,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "go_9x9"
     seed: int = 0
-    max_num_iters: int = 1000
+    max_num_iters: int = 2000
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -61,7 +61,7 @@ class Config(BaseModel):
     eval_interval: int = 5
 
     ignore_checkpoint: bool = False
-    mixed_precision: bool = False
+    mixed_precision: bool = True
 
     class Config:
         extra = "forbid"
