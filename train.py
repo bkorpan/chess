@@ -404,6 +404,8 @@ if __name__ == "__main__":
             'hours': 0,
             'frames': 0
         }
+    else:
+        print("checkpoint loaded!")
 
     rng_key = state['rng_key']
     model = state['model']
