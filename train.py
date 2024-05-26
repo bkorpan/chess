@@ -43,7 +43,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "go_9x9"
     seed: int = 0
-    max_num_iters: int = 2000
+    max_num_iters: int = 100
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -51,7 +51,7 @@ class Config(BaseModel):
     num_heads: int = 8
     widening_factor: int = 1.5
     # selfplay params
-    selfplay_batch_size: int = 128
+    selfplay_batch_size: int = 1024
     num_simulations: int = 2
     max_num_steps: int = 256
     # training params
@@ -522,5 +522,5 @@ if __name__ == "__main__":
     save_checkpoint(state, bucket_name, final_checkpoint_key)
 
     # Delete old checkpoint, terminate spot request and the current instance
-    delete_object(bucket_name, checkpoint_key)
+    #delete_object(bucket_name, checkpoint_key)
     terminate_spot_request_and_this_instance()
