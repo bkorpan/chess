@@ -85,7 +85,6 @@ class Chessformer(hk.Module):
     encoder_stack: EncoderStack
     model_size: int  # Embedding size.
     #position_vocab_size: int
-    num_actions: int
     num_tokens: int
     name: Optional[str] = None  # Optional identifier for the module.
 
@@ -109,20 +108,25 @@ class Chessformer(hk.Module):
         tokens = tokens.reshape(-1, self.num_tokens, token_size)
 
         # Use linear layer to embed inputs for now
-        input_embeddor = hk.Linear(self.model_size)
-        input_embeddings = input_embeddor(tokens)
+        input_embeddings = hk.Linear(self.model_size)(tokens)
 
         embed_init = hk.initializers.TruncatedNormal(stddev=0.02)
         positional_embeddings = hk.get_parameter(
             'positional_embeddings', [self.num_tokens, self.model_size], init=embed_init)
+
         input_embeddings = input_embeddings + positional_embeddings
 
         # Run the transformer over the inputs.
         board_embeddings = self.encoder_stack(input_embeddings)  # [B, T, D]
         board_flattened = board_embeddings.reshape(-1, self.model_size * self.num_tokens)
-        move_logits = hk.Linear(1)(board_embeddings).reshape(-1, self.num_actions-1)
-        pass_logits = hk.Linear(1)(board_flattened)
-        policy_logits = jnp.concatenate((move_logits, pass_logits), axis=-1)
+        #move_logits = hk.Linear(1)(board_embeddings).reshape(-1, self.num_actions-1)
+        #pass_logits = hk.Linear(1)(board_flattened)
+        #policy_logits = jnp.concatenate((move_logits, pass_logits), axis=-1)
+
+        from_embeddings = hk.Linear(self.model_size)(board_embeddings)
+        to_embeddings = hk.Linear(self.model_size)(board_embeddings)
+        policy_logits = from_embeddings @ to_embeddings.T
+
         value = hk.Linear(1)(board_flattened)
         value = value.reshape(-1)
 

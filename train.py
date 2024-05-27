@@ -41,9 +41,9 @@ num_devices = len(devices)
 
 
 class Config(BaseModel):
-    env_id: pgx.EnvId = "go_9x9"
+    env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 4500
+    max_num_iters: int = 400
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -72,7 +72,6 @@ config: Config = Config(**conf_dict)
 print(config)
 
 env = pgx.make(config.env_id)
-baseline = pgx.make_baseline_model(config.env_id + "_v0")
 
 
 def forward_fn(x):
@@ -85,8 +84,7 @@ def forward_fn(x):
     net = Chessformer(
         encoder_stack = encoder_stack,
         model_size = config.model_size,
-        num_actions = env.num_actions,
-        num_tokens = 81
+        num_tokens = 64
     )
     policy_out, value_out = net(x)
     return policy_out, value_out
@@ -258,7 +256,7 @@ def evaluate(rng_key, my_model):
         (my_logits, _), _ = forward.apply(
             my_model_parmas, my_model_state, None, state.observation
         )
-        opp_logits, _ = baseline(state.observation)
+        opp_logits = jnp.where(state.legal_action_mask, jnp.zeros(state.legal_action_mask.shape), jnp.finfo(logits.dtype).min)
         is_my_turn = (state.current_player == my_player).reshape((-1, 1))
         logits = jnp.where(is_my_turn, my_logits, opp_logits)
         key, subkey = jax.random.split(key)
