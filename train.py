@@ -52,11 +52,11 @@ class Config(BaseModel):
     widening_factor: int = 1.5
     # selfplay params
     selfplay_batch_size: int = 128
-    num_simulations: int = 8
+    num_simulations: int = 16
     max_num_steps: int = 256
     # training params
     training_batch_size: int = 1024
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     # eval params
     eval_interval: int = 5
 
