@@ -43,7 +43,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "go_9x9"
     seed: int = 0
-    max_num_iters: int = 3500
+    max_num_iters: int = 3600
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -56,7 +56,7 @@ class Config(BaseModel):
     max_num_steps: int = 256
     # training params
     training_batch_size: int = 1024
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
     # eval params
     eval_interval: int = 5
 
