@@ -53,9 +53,9 @@ class Config(BaseModel):
     # selfplay params
     selfplay_batch_size: int = 128
     num_simulations: int = 8
-    max_num_steps: int = 1024
+    max_num_steps: int = 256
     # training params
-    training_batch_size: int = 1024
+    training_batch_size: int = 128
     learning_rate: float = 3e-4
     # eval params
     eval_interval: int = 5
@@ -256,9 +256,10 @@ def evaluate(rng_key, my_model):
         (my_logits, _), _ = forward.apply(
             my_model_parmas, my_model_state, None, state.observation
         )
-        opp_logits = jnp.where(state.legal_action_mask, jnp.zeros(state.legal_action_mask.shape), jnp.finfo(my_logits.dtype).min)
+        opp_logits = jnp.zeros(state.legal_action_mask.shape)
         is_my_turn = (state.current_player == my_player).reshape((-1, 1))
         logits = jnp.where(is_my_turn, my_logits, opp_logits)
+        logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
         key, subkey = jax.random.split(key)
         action = jax.random.categorical(subkey, logits, axis=-1)
         state = jax.vmap(env.step)(state, action)
