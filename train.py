@@ -43,7 +43,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 400
+    max_num_iters: int = 200
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -51,9 +51,9 @@ class Config(BaseModel):
     num_heads: int = 8
     widening_factor: int = 1.5
     # selfplay params
-    selfplay_batch_size: int = 128
+    selfplay_batch_size: int = 64
     num_simulations: int = 8
-    max_num_steps: int = 256
+    max_num_steps: int = 1024
     # training params
     training_batch_size: int = 128
     learning_rate: float = 3e-4
