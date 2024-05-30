@@ -43,7 +43,7 @@ num_devices = len(devices)
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 20
+    max_num_iters: int = 100
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -54,7 +54,7 @@ class Config(BaseModel):
     selfplay_batch_size: int = 32
     num_simulations: int = 16
     max_num_steps: int = 1024
-    num_warmup_iterations: int = 100,
+    num_warmup_iterations: int = 100
     # training params
     training_batch_size: int = 128
     learning_rate: float = 3e-4
@@ -185,7 +185,6 @@ class Sample(NamedTuple):
     value_mask: jnp.ndarray
     draw_mask: jnp.ndarray
 
-@jax.pmap
 def compute_loss_input(data: SelfplayOutput, mask_draws=False) -> Sample:
     batch_size = config.selfplay_batch_size // num_devices
     # If episode is truncated, there is no value target
@@ -206,7 +205,7 @@ def compute_loss_input(data: SelfplayOutput, mask_draws=False) -> Sample:
     value_tgt = value_tgt[::-1, :]
 
     # Mask loss from draws during a warmup period to help our net learn what a win/loss looks like
-    draw_mask = jnp.where(mask_draws, jnp.abs(value_tgt), jnp.zeros_like(value_tgt))
+    draw_mask = jnp.where(mask_draws, jnp.abs(value_tgt), jnp.ones_like(value_tgt))
 
     return Sample(
         obs=data.obs,
@@ -223,7 +222,7 @@ def loss_fn(model_params, model_state, samples: Sample, rng_key):
     )
 
     policy_loss = optax.softmax_cross_entropy(logits, samples.policy_tgt)
-    policy_loss = jnp.mean(policy_loss * samples_draw_mask)
+    policy_loss = jnp.mean(policy_loss * samples.draw_mask)
 
     value_loss = optax.l2_loss(value, samples.value_tgt)
     value_loss = jnp.mean(value_loss * samples.value_mask * samples.draw_mask)  # mask if the episode is truncated
@@ -478,7 +477,7 @@ if __name__ == "__main__":
         keys = jax.random.split(subkey, num_devices)
         data: SelfplayOutput = selfplay(model, keys)
         is_warmup_iteration = (iteration <= config.num_warmup_iterations)
-        samples: Sample = compute_loss_input(data, mask_draws=is_warmup_iteration)
+        samples: Sample = jax.pmap(compute_loss_input, static_broadcasted_argnums=(1,))(data, is_warmup_iteration)
 
         # Shuffle samples and make minibatches
         samples = jax.device_get(samples)  # (#devices, batch, max_num_steps, ...)
