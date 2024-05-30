@@ -52,8 +52,9 @@ class Config(BaseModel):
     widening_factor: int = 1.5
     # selfplay params
     selfplay_batch_size: int = 32
-    num_simulations: int = 100
-    max_num_steps: int = 2048
+    num_simulations: int = 16
+    max_num_steps: int = 1024
+    num_warmup_iterations: int = 100,
     # training params
     training_batch_size: int = 128
     learning_rate: float = 3e-4
@@ -181,11 +182,11 @@ class Sample(NamedTuple):
     obs: jnp.ndarray
     policy_tgt: jnp.ndarray
     value_tgt: jnp.ndarray
-    mask: jnp.ndarray
-
+    value_mask: jnp.ndarray
+    draw_mask: jnp.ndarray
 
 @jax.pmap
-def compute_loss_input(data: SelfplayOutput) -> Sample:
+def compute_loss_input(data: SelfplayOutput, mask_draws=False) -> Sample:
     batch_size = config.selfplay_batch_size // num_devices
     # If episode is truncated, there is no value target
     # So when we compute value loss, we need to mask it
@@ -204,11 +205,15 @@ def compute_loss_input(data: SelfplayOutput) -> Sample:
     )
     value_tgt = value_tgt[::-1, :]
 
+    # Mask loss from draws during a warmup period to help our net learn what a win/loss looks like
+    draw_mask = jnp.where(mask_draws, jnp.abs(value_tgt), jnp.zeros_like(value_tgt))
+
     return Sample(
         obs=data.obs,
         policy_tgt=data.action_weights,
         value_tgt=value_tgt,
-        mask=value_mask,
+        value_mask=value_mask,
+        draw_mask=draw_mask
     )
 
 
@@ -218,10 +223,10 @@ def loss_fn(model_params, model_state, samples: Sample, rng_key):
     )
 
     policy_loss = optax.softmax_cross_entropy(logits, samples.policy_tgt)
-    policy_loss = jnp.mean(policy_loss)
+    policy_loss = jnp.mean(policy_loss * samples_draw_mask)
 
     value_loss = optax.l2_loss(value, samples.value_tgt)
-    value_loss = jnp.mean(value_loss * samples.mask)  # mask if the episode is truncated
+    value_loss = jnp.mean(value_loss * samples.value_mask * samples.draw_mask)  # mask if the episode is truncated
 
     return policy_loss + value_loss, (model_state, policy_loss, value_loss)
 
@@ -472,7 +477,8 @@ if __name__ == "__main__":
         rng_key, subkey = jax.random.split(rng_key)
         keys = jax.random.split(subkey, num_devices)
         data: SelfplayOutput = selfplay(model, keys)
-        samples: Sample = compute_loss_input(data)
+        is_warmup_iteration = (iteration <= config.num_warmup_iterations)
+        samples: Sample = compute_loss_input(data, mask_draws=is_warmup_iteration)
 
         # Shuffle samples and make minibatches
         samples = jax.device_get(samples)  # (#devices, batch, max_num_steps, ...)
