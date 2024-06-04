@@ -39,6 +39,8 @@ from model import EncoderStack, Chessformer
 devices = jax.local_devices()
 num_devices = len(devices)
 
+jnp.set_printoptions(threshold=2**30)
+
 
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
@@ -183,9 +185,9 @@ class Sample(NamedTuple):
     policy_tgt: jnp.ndarray
     value_tgt: jnp.ndarray
     value_mask: jnp.ndarray
-    draw_mask: jnp.ndarray
 
-def compute_loss_input(data: SelfplayOutput, mask_draws=False) -> Sample:
+@jax.pmap
+def compute_loss_input(data: SelfplayOutput) -> Sample:
     batch_size = config.selfplay_batch_size // num_devices
     # If episode is truncated, there is no value target
     # So when we compute value loss, we need to mask it
@@ -204,37 +206,34 @@ def compute_loss_input(data: SelfplayOutput, mask_draws=False) -> Sample:
     )
     value_tgt = value_tgt[::-1, :]
 
-    # Mask loss from draws during a warmup period to help our net learn what a win/loss looks like
-    draw_mask = jnp.where(mask_draws, jnp.abs(value_tgt), jnp.ones_like(value_tgt))
-
     return Sample(
         obs=data.obs,
         policy_tgt=data.action_weights,
         value_tgt=value_tgt,
-        value_mask=value_mask,
-        draw_mask=draw_mask
+        value_mask=value_mask
     )
 
 
-def loss_fn(model_params, model_state, samples: Sample, rng_key):
+def loss_fn(model_params, model_state, samples: Sample, rng_key, mask_policy):
     (logits, value), model_state = forward.apply(
         model_params, model_state, rng_key, samples.obs
     )
 
     policy_loss = optax.softmax_cross_entropy(logits, samples.policy_tgt)
-    policy_loss = jnp.mean(policy_loss * samples.draw_mask)
+    policy_loss = jnp.mean(policy_loss)
+    policy_loss = jnp.where(mask_policy, jnp.zeros_like(policy_loss), policy_loss)
 
     value_loss = optax.l2_loss(value, samples.value_tgt)
-    value_loss = jnp.mean(value_loss * samples.value_mask * samples.draw_mask)  # mask if the episode is truncated
+    value_loss = jnp.mean(value_loss * samples.value_mask)  # mask if the episode is truncated
 
     return policy_loss + value_loss, (model_state, policy_loss, value_loss)
 
 
 @partial(jax.pmap, axis_name="i")
-def train(model, opt_state, data: Sample, rng_key):
+def train(model, opt_state, data: Sample, rng_key, mask_policy):
     model_params, model_state = model
     grads, (model_state, policy_loss, value_loss) = jax.grad(loss_fn, has_aux=True)(
-        model_params, model_state, data, rng_key
+        model_params, model_state, data, rng_key, mask_policy
     )
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = optimizer.update(grads, opt_state)
@@ -477,10 +476,11 @@ if __name__ == "__main__":
         keys = jax.random.split(subkey, num_devices)
         data: SelfplayOutput = selfplay(model, keys)
         is_warmup_iteration = (iteration <= config.num_warmup_iterations)
-        samples: Sample = jax.pmap(compute_loss_input, static_broadcasted_argnums=(1,))(data, is_warmup_iteration)
+        samples: Sample = compute_loss_input(data)
 
         # Shuffle samples and make minibatches
         samples = jax.device_get(samples)  # (#devices, batch, max_num_steps, ...)
+        print(samples.value_tgt[0,0,:])
         frames += samples.obs.shape[0] * samples.obs.shape[1] * samples.obs.shape[2]
         samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
         rng_key, subkey = jax.random.split(rng_key)
@@ -497,7 +497,7 @@ if __name__ == "__main__":
         policy_losses, value_losses = [], []
         for i in range(num_updates):
             minibatch: Sample = jax.tree_map(lambda x: x[i], minibatches)
-            model, opt_state, policy_loss, value_loss = train(model, opt_state, minibatch, keys)
+            model, opt_state, policy_loss, value_loss = train(model, opt_state, minibatch, keys, jnp.array([is_warmup_iteration]))
             policy_losses.append(policy_loss.mean().item())
             value_losses.append(value_loss.mean().item())
         policy_loss = sum(policy_losses) / len(policy_losses)
