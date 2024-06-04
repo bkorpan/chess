@@ -45,7 +45,7 @@ jnp.set_printoptions(threshold=2**30)
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 100
+    max_num_iters: int = 2000
     # network params
     model_size: int = 256
     num_layers: int = 6
