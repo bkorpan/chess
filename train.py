@@ -54,7 +54,7 @@ class Config(BaseModel):
     widening_factor: int = 1.5
     # selfplay params
     selfplay_batch_size: int = 32
-    num_simulations: int = 16
+    num_simulations: int = 8
     max_num_steps: int = 1024
     num_warmup_iterations: int = 100
     # training params
