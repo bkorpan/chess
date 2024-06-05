@@ -286,7 +286,8 @@ def selfplay_debug(rng_key, my_model):
     states.append(state)
 
     while not state.terminated:
-        obs = state.observation[jnp.newaxis, jnp.newaxis, :]
+        obs = state.observation[jnp.newaxis, :]
+        obs = jax.vmap(lambda x: x)(obs)
         print(obs.shape)
         (logits, _), _ = forward.apply(
                 my_model_parmas, my_model_state, None, obs
