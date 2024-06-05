@@ -247,7 +247,7 @@ def evaluate(rng_key, my_model):
     """A simplified evaluation by sampling. Only for debugging.
     Please use MCTS and run tournaments for serious evaluation."""
     my_player = 0
-    my_model_parmas, my_model_state = my_model
+    my_model_params, my_model_state = my_model
 
     key, subkey = jax.random.split(rng_key)
     batch_size = config.selfplay_batch_size // num_devices
@@ -257,7 +257,7 @@ def evaluate(rng_key, my_model):
     def body_fn(val):
         key, state, R = val
         (my_logits, _), _ = forward.apply(
-            my_model_parmas, my_model_state, None, state.observation
+            my_model_params, my_model_state, None, state.observation
         )
         opp_logits = jnp.zeros(state.legal_action_mask.shape)
         is_my_turn = (state.current_player == my_player).reshape((-1, 1))
@@ -275,24 +275,30 @@ def evaluate(rng_key, my_model):
     return R
 
 
-def selfplay_debug(rng_key, my_model):
-    my_player = 0
-    my_model_parmas, my_model_state = my_model
+def selfplay_debug(rng_key, model):
+    model_0 = jax.tree_util.tree_map(lambda x: x[0], model)
+    model_0 = jax.device_get(model_0)
+    model_params, model_state = model_0
+
+    #key, subkey = jax.random.split(rng_key)
+    #keys = jax.random.split(subkey, 2)
+    #state = jax.vmap(env.init)(keys)
 
     key, subkey = jax.random.split(rng_key)
     state = env.init(key)
 
     states = []
     states.append(state)
-
+#
     while not state.terminated:
-        obs = state.observation[jnp.newaxis, :]
-        obs = jax.vmap(lambda x: x)(obs)
+        #obs = state.observation[jnp.newaxis, :]
+        #obs = jax.vmap(lambda x: x)(obs)
+        obs = state.observation
         print(obs.shape)
         (logits, _), _ = forward.apply(
-                my_model_parmas, my_model_state, None, obs
+                model_params, model_state, None, obs
         )
-        logits = logits[0]
+        #logits = logits[0]
         logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
         key, subkey = jax.random.split(key)
         action = jax.random.categorical(subkey, logits, axis=-1)
