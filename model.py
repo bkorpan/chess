@@ -127,6 +127,7 @@ class Chessformer(hk.Module):
         to_embeddings = hk.Linear(self.model_size)(board_embeddings)
         policy_logits = jnp.matmul(from_embeddings, jnp.swapaxes(to_embeddings, -1, -2))
         policy_logits = policy_logits.reshape(-1, self.num_tokens ** 2)
+        policy_logits = hk.Bias()(policy_logits)
 
         value = hk.Linear(1)(board_flattened)
         value = value.reshape(-1)
