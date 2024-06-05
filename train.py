@@ -275,6 +275,32 @@ def evaluate(rng_key, my_model):
     return R
 
 
+def selfplay_debug(rng_key, my_model):
+    my_player = 0
+    my_model_parmas, my_model_state = my_model
+
+    key, subkey = jax.random.split(rng_key)
+    state = env.init(key)
+
+    states = []
+    states.append(state)
+
+    while not state.terminated:
+        obs = state.observation[jnp.newaxis, jnp.newaxis, :]
+        print(obs.shape)
+        (logits, _), _ = forward.apply(
+                my_model_parmas, my_model_state, None, obs
+        )
+        logits = logits[0]
+        logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+        key, subkey = jax.random.split(key)
+        action = jax.random.categorical(subkey, logits, axis=-1)
+        state = env.step(state, action)
+        states.append(state)
+
+    pgx.save_svg_animation(states, f"chess_debug.svg", frame_duration_seconds=1)
+
+
 def save_checkpoint(state, bucket_name, key):
     s3 = boto3.resource('s3')
 
@@ -446,6 +472,7 @@ if __name__ == "__main__":
                     f"eval/vs_baseline/lose_rate": ((R == -1).sum() / R.size).item(),
                 }
             )
+            selfplay_debug(rng_key, model)
 
         if check_for_interruption():
             # Store checkpoint
