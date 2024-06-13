@@ -18,6 +18,7 @@ import pickle
 import time
 import logging
 import requests
+import sys
 from functools import partial
 from typing import NamedTuple
 
@@ -275,37 +276,70 @@ def evaluate(rng_key, my_model):
     return R
 
 
+def get_recursive_size(obj, seen=None, name='root'):
+    """Recursively finds the memory size of an object and its contents, including names and sizes of sub-objects."""
+    if seen is None:
+        seen = set()
+
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0, []
+
+    seen.add(obj_id)
+    size = sys.getsizeof(obj)
+    details = [(name, size)]
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            k_size, k_details = get_recursive_size(k, seen, f'{name}.key({repr(k)})')
+            v_size, v_details = get_recursive_size(v, seen, f'{name}[{repr(k)}]')
+            size += k_size + v_size
+            details.extend(k_details)
+            details.extend(v_details)
+    elif hasattr(obj, '__dict__'):
+        d_size, d_details = get_recursive_size(obj.__dict__, seen, f'{name}.__dict__')
+        size += d_size
+        details.extend(d_details)
+#    elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes, bytearray)):
+#        for i, item in enumerate(obj):
+#            item_size, item_details = get_recursive_size(item, seen, f'{name}[{i}]')
+#            size += item_size
+#            details.extend(item_details)
+
+    return size, details
+
+
+@jax.jit
+def play_step(state, model_params, model_state, key):
+    obs = jax.device_put(state.observation)
+    (logits, _), _ = forward.apply(
+            model_params, model_state, None, obs
+    )
+    logits = logits[0]
+    logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+    key, subkey = jax.random.split(key)
+    action = jax.random.categorical(subkey, logits, axis=-1)
+    state = env.step(state, action)
+    return state, key
+
 def selfplay_debug(rng_key, model):
     model_0 = jax.tree_util.tree_map(lambda x: x[0], model)
     model_0 = jax.device_get(model_0)
-    model_params, model_state = model_0
 
-    #key, subkey = jax.random.split(rng_key)
-    #keys = jax.random.split(subkey, 2)
-    #state = jax.vmap(env.init)(keys)
+    model_0 = jax.device_put(model_0)
+    model_params, model_state = model_0
 
     key, subkey = jax.random.split(rng_key)
     state = env.init(key)
 
     states = []
     states.append(state)
-#
+
     while not state.terminated:
-        #obs = state.observation[jnp.newaxis, :]
-        #obs = jax.vmap(lambda x: x)(obs)
-        obs = state.observation
-        print(obs.shape)
-        (logits, _), _ = forward.apply(
-                model_params, model_state, None, obs
-        )
-        #logits = logits[0]
-        logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
-        key, subkey = jax.random.split(key)
-        action = jax.random.categorical(subkey, logits, axis=-1)
-        state = env.step(state, action)
+        state, key = play_step(state, model_params, model_state, key)
         states.append(state)
 
-    pgx.save_svg_animation(states, f"chess_debug.svg", frame_duration_seconds=1)
+    pgx.save_svg_animation(states, f"chess_debug.svg", frame_duration_seconds=.5)
 
 
 def save_checkpoint(state, bucket_name, key):
