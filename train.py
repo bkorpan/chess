@@ -57,7 +57,7 @@ class Config(BaseModel):
     selfplay_batch_size: int = 32
     num_simulations: int = 8
     max_num_steps: int = 1024
-    num_warmup_iterations: int = 100
+    num_warmup_iterations: int = 0
     # training params
     training_batch_size: int = 128
     learning_rate: float = 3e-4
@@ -276,58 +276,30 @@ def evaluate(rng_key, my_model):
     return R
 
 
-def get_recursive_size(obj, seen=None, name='root'):
-    """Recursively finds the memory size of an object and its contents, including names and sizes of sub-objects."""
-    if seen is None:
-        seen = set()
-
-    obj_id = id(obj)
-    if obj_id in seen:
-        return 0, []
-
-    seen.add(obj_id)
-    size = sys.getsizeof(obj)
-    details = [(name, size)]
-
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            k_size, k_details = get_recursive_size(k, seen, f'{name}.key({repr(k)})')
-            v_size, v_details = get_recursive_size(v, seen, f'{name}[{repr(k)}]')
-            size += k_size + v_size
-            details.extend(k_details)
-            details.extend(v_details)
-    elif hasattr(obj, '__dict__'):
-        d_size, d_details = get_recursive_size(obj.__dict__, seen, f'{name}.__dict__')
-        size += d_size
-        details.extend(d_details)
-#    elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes, bytearray)):
-#        for i, item in enumerate(obj):
-#            item_size, item_details = get_recursive_size(item, seen, f'{name}[{i}]')
-#            size += item_size
-#            details.extend(item_details)
-
-    return size, details
-
-
 @jax.jit
-def play_step(state, model_params, model_state, key):
+def play_step(state, model, key):
     obs = jax.device_put(state.observation)
+    model_params, model_state = model
+
     (logits, _), _ = forward.apply(
             model_params, model_state, None, obs
     )
     logits = logits[0]
     logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+
+    mask = state.legal_action_mask.copy()
     key, subkey = jax.random.split(key)
     action = jax.random.categorical(subkey, logits, axis=-1)
     state = env.step(state, action)
-    return state, key
 
-def selfplay_debug(rng_key, model):
+    return state, key, logits, mask
+
+
+def selfplay_debug(rng_key, model, iteration):
     model_0 = jax.tree_util.tree_map(lambda x: x[0], model)
-    model_0 = jax.device_get(model_0)
+    model = jax.device_get(model_0)
 
-    model_0 = jax.device_put(model_0)
-    model_params, model_state = model_0
+    model = jax.device_put(model)
 
     key, subkey = jax.random.split(rng_key)
     state = env.init(key)
@@ -336,10 +308,61 @@ def selfplay_debug(rng_key, model):
     states.append(state)
 
     while not state.terminated:
-        state, key = play_step(state, model_params, model_state, key)
+        state, key, logits, mask = play_step(state, model, key)
         states.append(state)
 
-    pgx.save_svg_animation(states, f"chess_debug.svg", frame_duration_seconds=.5)
+    print((state._hash_history == state._zobrist_hash).all(axis=1).sum())
+
+    #print(logits[mask != 0])
+
+    #pgx.save_svg_animation(states, f"chess_debug.svg", frame_duration_seconds=.5)
+    #state.save_svg(f"svgs/chess_debug_{iteration}.svg")
+
+
+@jax.jit
+def play_step_mcts(state, model, key):
+    obs = jax.device_put(state.observation)
+    model_params, model_state = model
+
+    (logits, value), _ = forward.apply(
+        model_params, model_state, None, obs
+    )
+    root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
+
+    policy_output = mctx.gumbel_muzero_policy(
+        params=model,
+        rng_key=key,
+        root=root,
+        recurrent_fn=recurrent_fn,
+        num_simulations=config.num_simulations,
+        invalid_actions=~state.legal_action_mask,
+        qtransform=mctx.qtransform_completed_by_mix_value,
+        gumbel_scale=1.0,
+    )
+
+    state = jax.vmap(env.step)(state, policy_output.action)
+
+    return state, key
+
+
+def selfplay_debug_mcts(rng_key, model, iteration):
+    model_0 = jax.tree_util.tree_map(lambda x: x[0], model)
+    model = jax.device_get(model_0)
+
+    model = jax.device_put(model)
+
+    key, sub_key = jax.random.split(rng_key)
+    keys = jax.random.split(sub_key, 1)
+    state = jax.vmap(env.init)(keys)
+
+    while not all(state.terminated):
+        state, key = play_step_mcts(state, model, key)
+
+    print((state._hash_history == state._zobrist_hash).all(axis=-1).sum(axis=-1))
+    print(state._halfmove_count)
+    print(state._step_count)
+    print(state.legal_action_mask.any())
+    print(state.rewards)
 
 
 def save_checkpoint(state, bucket_name, key):
@@ -513,7 +536,7 @@ if __name__ == "__main__":
                     f"eval/vs_baseline/lose_rate": ((R == -1).sum() / R.size).item(),
                 }
             )
-            selfplay_debug(rng_key, model)
+            selfplay_debug_mcts(rng_key, model, iteration)
 
         if check_for_interruption():
             # Store checkpoint
