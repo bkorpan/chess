@@ -345,6 +345,34 @@ def play_step_mcts(state, model, key):
     return state, key
 
 
+@jax.jit
+def get_base_and_improved_policy(state, model, key):
+    obs = jax.device_put(state.observation)
+    model_params, model_state = model
+
+    (logits, value), _ = forward.apply(
+        model_params, model_state, None, obs
+    )
+    root = mctx.RootFnOutput(prior_logits=logits, value=value, embedding=state)
+
+    policy_output = mctx.gumbel_muzero_policy(
+        params=model,
+        rng_key=key,
+        root=root,
+        recurrent_fn=recurrent_fn,
+        num_simulations=config.num_simulations,
+        invalid_actions=~state.legal_action_mask,
+        qtransform=mctx.qtransform_completed_by_mix_value,
+        gumbel_scale=1.0,
+    )
+
+    logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+    base_policy = jax.nn.softmax(logits)
+    improved_policy = policy_output.action_weights
+    mask = state.legal_action_mask
+
+    return base_policy, improved_policy
+
 def selfplay_debug_mcts(rng_key, model, iteration):
     model_0 = jax.tree_util.tree_map(lambda x: x[0], model)
     model = jax.device_get(model_0)
@@ -354,15 +382,24 @@ def selfplay_debug_mcts(rng_key, model, iteration):
     key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, 1)
     state = jax.vmap(env.init)(keys)
+    states = [state]
 
     while not all(state.terminated):
         state, key = play_step_mcts(state, model, key)
+        states.append(state)
 
     print((state._hash_history == state._zobrist_hash).all(axis=-1).sum(axis=-1))
     print(state._halfmove_count)
     print(state._step_count)
     print(state.legal_action_mask.any())
     print(state.rewards)
+
+    test_state = states[len(states) // 2]
+
+    base_policy, improved_policy = get_base_and_improved_policy(test_state, model, key)
+    mask = test_state.legal_action_mask
+    print(base_policy[mask != 0])
+    print(improved_policy[mask != 0])
 
 
 def save_checkpoint(state, bucket_name, key):
