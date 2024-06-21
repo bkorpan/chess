@@ -157,6 +157,7 @@ def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
             invalid_actions=~state.legal_action_mask,
             qtransform=mctx.qtransform_completed_by_mix_value,
             gumbel_scale=1.0,
+            policy_scale=0.5
         )
         actor = state.current_player
         keys = jax.random.split(key2, batch_size)
@@ -338,6 +339,7 @@ def play_step_mcts(state, model, key):
         invalid_actions=~state.legal_action_mask,
         qtransform=mctx.qtransform_completed_by_mix_value,
         gumbel_scale=1.0,
+        policy_scale=0.5
     )
 
     state = jax.vmap(env.step)(state, policy_output.action)
@@ -364,6 +366,7 @@ def get_base_and_improved_policy(state, model, key):
         invalid_actions=~state.legal_action_mask,
         qtransform=mctx.qtransform_completed_by_mix_value,
         gumbel_scale=1.0,
+        policy_scale=0.5
     )
 
     logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
