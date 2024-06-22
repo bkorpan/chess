@@ -157,7 +157,7 @@ def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
             invalid_actions=~state.legal_action_mask,
             qtransform=mctx.qtransform_completed_by_mix_value,
             gumbel_scale=1.0,
-            policy_scale=0.9
+            policy_scale=1.0
         )
         actor = state.current_player
         keys = jax.random.split(key2, batch_size)
