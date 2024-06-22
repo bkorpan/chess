@@ -576,7 +576,7 @@ if __name__ == "__main__":
                     f"eval/vs_baseline/lose_rate": ((R == -1).sum() / R.size).item(),
                 }
             )
-            selfplay_debug_mcts(rng_key, model, iteration)
+            #selfplay_debug_mcts(rng_key, model, iteration)
 
         if check_for_interruption():
             # Store checkpoint
