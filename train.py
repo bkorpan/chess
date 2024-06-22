@@ -46,7 +46,7 @@ jnp.set_printoptions(threshold=2**30)
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 2000
+    max_num_iters: int = 3000
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -157,7 +157,7 @@ def selfplay(model, rng_key: jnp.ndarray) -> SelfplayOutput:
             invalid_actions=~state.legal_action_mask,
             qtransform=mctx.qtransform_completed_by_mix_value,
             gumbel_scale=1.0,
-            policy_scale=0.5
+            policy_scale=0.9
         )
         actor = state.current_player
         keys = jax.random.split(key2, batch_size)
