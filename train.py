@@ -271,10 +271,10 @@ def evaluate(rng_key, my_model):
         R = R + state.rewards[jnp.arange(batch_size), my_player]
         return (key, state, R)
 
-    _, _, R = jax.lax.while_loop(
+    _, state, R = jax.lax.while_loop(
         lambda x: ~(x[1].terminated.all()), body_fn, (key, state, jnp.zeros(batch_size))
     )
-    return R
+    return R, state
 
 
 @jax.jit
@@ -567,7 +567,7 @@ if __name__ == "__main__":
             # Evaluation
             rng_key, subkey = jax.random.split(rng_key)
             keys = jax.random.split(subkey, num_devices)
-            R = evaluate(keys, model)
+            R, state = evaluate(keys, model)
             log.update(
                 {
                     f"eval/vs_baseline/avg_R": R.mean().item(),
@@ -576,6 +576,10 @@ if __name__ == "__main__":
                     f"eval/vs_baseline/lose_rate": ((R == -1).sum() / R.size).item(),
                 }
             )
+            print(state._step_count)
+            print(state._halfmove_count)
+            print(state.legal_action_mask.any(axis=-1))
+            print((state._hash_history == state._zobrist_hash).all(axis=-1).sum(axis=-1))
             #selfplay_debug_mcts(rng_key, model, iteration)
 
         if check_for_interruption():
