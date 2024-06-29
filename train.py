@@ -46,7 +46,7 @@ jnp.set_printoptions(threshold=2**30)
 class Config(BaseModel):
     env_id: pgx.EnvId = "chess"
     seed: int = 0
-    max_num_iters: int = 4000
+    max_num_iters: int = 5000
     # network params
     model_size: int = 256
     num_layers: int = 6
@@ -576,10 +576,11 @@ if __name__ == "__main__":
                     f"eval/vs_baseline/lose_rate": ((R == -1).sum() / R.size).item(),
                 }
             )
+            print(R)
             print(state._step_count)
             print(state._halfmove_count)
             print(state.legal_action_mask.any(axis=-1))
-            print((state._hash_history == state._zobrist_hash).all(axis=-1).sum(axis=-1))
+            print((state._hash_history == jnp.expand_dims(state._zobrist_hash, axis=2)).all(axis=-1).sum(axis=-1))
             #selfplay_debug_mcts(rng_key, model, iteration)
 
         if check_for_interruption():
