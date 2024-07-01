@@ -1,0 +1,6 @@
+[submodule "pgx"]
+	path = pgx
+	url = https://github.com/bkorpan/pgx
+[submodule "mctx"]
+	path = mctx
+	url = https://github.com/bkorpan/mctx

@@ -22,13 +22,16 @@ import sys
 from functools import partial
 from typing import NamedTuple
 
+sys.path.append(os.path.abspath("mctx/mctx"))
+sys.path.append(os.path.abspath("pgx/pgx"))
+
 import haiku as hk
 import jax
 import jax.numpy as jnp
 import jmp
-import mctx
+from mctx.mctx import mctx
 import optax
-import pgx
+from pgx.pgx import pgx
 import boto3
 from botocore.exceptions import ClientError
 from omegaconf import OmegaConf
